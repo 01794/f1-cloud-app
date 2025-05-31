@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>F1 Mapa Interativo</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+        #map {
+            height: 600px;
+            width: 100%;
+        }
+        body {
+            font-family: sans-serif;
+            padding: 20px;
+        }
+        .endpoint-list {
+            margin-bottom: 20px;
+        }
+        .endpoint-list button {
+            margin: 5px 0;
+            display: block;
+        }
+        pre {
+            background: #eee;
+            padding: 10px;
+            white-space: pre-wrap;
+            max-height: 200px;
+            overflow: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>🏎️ F1 Mapa Interativo</h1>
+
+    <div class="endpoint-list">
+        <h2>Endpoints disponíveis para teste</h2>
+        <ul id="endpoints-list"></ul>
+    </div>
+
+    <form id="telemetry-form">
+        <label>Ano: <input type="number" id="year" value="2024" required></label>
+        <label>Corrida (Round): <input type="number" id="round" value="1" required></label>
+        <button type="submit">Gerar JSON</button>
+    </form>
+
+    <button id="load-map-btn">Carregar mapa</button>
+
+    <h3>Resposta da API:</h3>
+    <pre id="api-response"></pre>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script>
+        const endpoints = {{ endpoints|tojson }};
+        const endpointsList = document.getElementById('endpoints-list');
+        const apiResponse = document.getElementById('api-response');
+        let telemetryUrl = '';
+
+        // Mostrar os endpoints na lista com botões para chamar GET
+        for (const [name, url] of Object.entries(endpoints)) {
+            const li = document.createElement('li');
+            const btn = document.createElement('button');
+            btn.textContent = name;
+            btn.onclick = async () => {
+                if (btn.textContent.includes('POST')) {
+                    alert("Use o formulário para chamadas POST.");
+                    return;
+                }
+                apiResponse.textContent = 'Carregando...';
+                try {
+                    const res = await fetch(url);
+                    const data = await res.json();
+                    apiResponse.textContent = JSON.stringify(data, null, 2);
+                } catch (err) {
+                    apiResponse.textContent = 'Erro: ' + err.message;
+                }
+            };
+            li.appendChild(btn);
+            li.appendChild(document.createTextNode(` - ${url}`));
+            endpointsList.appendChild(li);
+        }
+
+        // Leaflet map setup
+        const map = L.map('map').setView([0, 0], 1);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        const form = document.getElementById('telemetry-form');
+        const loadBtn = document.getElementById('load-map-btn');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const year = document.getElementById('year').value;
+            const round = document.getElementById('round').value;
+
+            const res = await fetch('/api/generate-telemetry-json', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ year, round })
+            });
+
+            const data = await res.json();
+            if (res.ok) {
+                alert("JSON gerado com sucesso!");
+                telemetryUrl = `https://storage.googleapis.com/f1-fastf1-data/${data.file}`;
+                apiResponse.textContent = JSON.stringify(data, null, 2);
+            } else {
+                alert("Erro: " + data.error);
+                apiResponse.textContent = JSON.stringify(data, null, 2);
+            }
+        });
+
+        loadBtn.addEventListener('click', async () => {
+            if (!telemetryUrl) {
+                alert("Gera primeiro o JSON.");
+                return;
+            }
+
+            const res = await fetch(telemetryUrl);
+            const telemetry = await res.json();
+
+            map.eachLayer(layer => {
+                if (layer instanceof L.Marker || layer instanceof L.CircleMarker) map.removeLayer(layer);
+            });
+
+            for (const driver in telemetry) {
+                const x = telemetry[driver].x;
+                const y = telemetry[driver].y;
+
+                if (x.length && y.length) {
+                    const lat = y[0] / 100000;
+                    const lon = x[0] / 100000;
+
+                    L.circleMarker([lat, lon], {
+                        radius: 5,
+                        color: 'red'
+                    }).bindPopup(driver).addTo(map);
+                }
+            }
+
+            map.setView([0, 0], 5);
+        });
+    </script>
+</body>
+</html>

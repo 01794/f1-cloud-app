@@ -1,0 +1,95 @@
+body {
+  margin: 0;
+  background-color: #121212;
+  color: #ffffff;
+  font-family: Arial, sans-serif;
+}
+
+.container {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  grid-template-rows: auto 1fr auto;
+  height: 100vh;
+  gap: 2px;
+}
+
+.sidebar {
+  grid-row: 1 / 4;
+  background-color: #1e1e1e;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px 10px;
+}
+
+.sidebar h2 {
+  margin-bottom: 30px;
+  font-size: 20px;
+}
+
+.sidebar a {
+  color: #ffffff;
+  text-decoration: none;
+  margin: 10px 0;
+  padding: 8px 12px;
+  border-radius: 5px;
+  transition: background-color 0.2s ease;
+}
+
+.sidebar a:hover {
+  background-color: #333333;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: #1e1e1e;
+  padding: 10px 20px;
+}
+
+.telemetry-and-map {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 2px;
+}
+
+.telemetry, .map {
+  background-color: #2a2a2a;
+  padding: 10px;
+}
+
+.bottom-tables {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  background-color: #1e1e1e;
+  gap: 2px;
+}
+
+.bottom-table {
+  background-color: #2a2a2a;
+  padding: 10px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  padding: 6px;
+  text-align: center;
+  border-bottom: 1px solid #444;
+}
+
+.flag-icon {
+  width: 30px;
+  height: auto;
+  margin-right: 10px;
+}
+
+.weather-icon {
+  width: 20px;
+  height: auto;
+  margin-left: 10px;
+}

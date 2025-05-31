@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>F1 LVTL</title>
+  <link rel="stylesheet" href="/static/css/telemetry.css" />
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+  <script src="/static/js/firebase.js" defer></script>
+  <script src="/static/js/telemetry.js" defer></script>
+  <script src="/static/js/trackmap.js" defer></script>
+</head>
+<body>
+  <div class="container">
+    <div class="sidebar">
+      <h2>F1 LVTL</h2>
+      <a href="index.html">🏁 Index</a>
+      <a href="compare.html">📊 Compare</a>
+    </div>
+
+    <div class="header">
+      <div>
+        <img src="flag.png" alt="Bandeira" class="flag-icon" />
+        GP Nome - Sessão - Tempo Sessão
+      </div>
+      <div>
+        Asfalto: 35°C | Ar: 29°C | Humidade: 60% |
+        <img src="sun.png" alt="Clima" class="weather-icon" /> |
+        Vento: 12km/h NE |
+        <span style="color: yellow;">⚑ Bandeira Amarela</span>
+      </div>
+    </div>
+
+    <div class="telemetry-and-map">
+      <div class="telemetry">
+        <h3>F1 Live Telemetry</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Pits</th>
+              <th>Pos</th>
+              <th>#</th>
+              <th>Piloto</th>
+              <th>Pneus</th>
+              <th>+ à frente</th>
+              <th>Últ. Volta</th>
+              <th>S1</th>
+              <th>S2</th>
+              <th>S3</th>
+            </tr>
+          </thead>
+          <tbody id="telemetry-body"></tbody>
+        </table>
+      </div>
+      <div class="map">
+        <h3>Mapa do Circuito</h3>
+        <svg id="track-map" viewBox="0 0 4000 4000" style="width: 100%; height: 400px; background-color: #111;"></svg>
+      </div>
+    </div>
+
+    <div class="bottom-tables">
+      <div class="bottom-table"><h4>Resumo Corrida</h4></div>
+      <div class="bottom-table"><h4>Rádios Pilotos</h4></div>
+      <div class="bottom-table"><h4>Penalidades</h4></div>
+    </div>
+  </div>
+</body>
+</html>

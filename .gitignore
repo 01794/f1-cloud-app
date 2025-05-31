@@ -1,0 +1,9 @@
+cache/
+__pycache__/
+venv/
+f1-cloud-lvtl-firebase-adminsdk-fbsvc-978b212e8f.json
+firebase.js
+firebase.json
+firestore.rules
+firebase.indexes.json
+
