@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8" />
+  <title>Comparador de Pilotos - F1 LVTL</title>
+  <link rel="stylesheet" href="/static/css/telemetry.css">
+</head>
+<body>
+  <div class="container">
+    <div class="sidebar">
+      <h2>F1 LVTL</h2>
+      <a href="/">🏁 Live Telemetry</a>
+      <a href="/compare">📊 Compare</a>
+    </div>
+
+    <div class="header">
+      <h2>Comparar Pilotos</h2>
+    </div>
+
+    <div class="telemetry">
+      <form id="compare-form">
+        <label>Piloto 1: <input type="text" name="driver1" required></label>
+        <label>Piloto 2: <input type="text" name="driver2" required></label>
+        <label>Ano: <input type="number" name="year" value="2024" required></label>
+        <label>Corrida (round): <input type="number" name="round" value="1" required></label>
+        <label>Session: <select name="session">
+          <option value="Q">Qualificação</option>
+          <option value="R">Corrida</option>
+        </select></label>
+        <button type="submit">Comparar</button>
+      </form>
+
+      <div id="result"></div>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById("compare-form").addEventListener("submit", function (e) {
+      e.preventDefault();
+      const form = e.target;
+      const params = new URLSearchParams(new FormData(form)).toString();
+      fetch(`/api/compare?${params}`)
+        .then(r => r.json())
+        .then(data => {
+          document.getElementById("result").innerHTML = `
+            <h3>Resultado:</h3>
+            <p>${data.driver1.name} - Melhor volta: ${data.driver1.best_lap}</p>
+            <p>${data.driver2.name} - Melhor volta: ${data.driver2.best_lap}</p>
+          `;
+        });
+    });
+  </script>
+</body>
+</html>

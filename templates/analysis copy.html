@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="pt">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>F1 Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        /* teu CSS já está ótimo, mantendo estilo clean e responsivo */
+    </style>
+</head>
+
+<body>
+
+    <h1>F1 Dashboard</h1>
+
+    <div>
+        <label for="yearSelect">Ano:</label>
+        <select id="yearSelect">
+            <option>2024</option>
+            <option>2023</option>
+            <option>2022</option>
+        </select>
+
+        <label for="roundSelect">Round:</label>
+        <select id="roundSelect"></select>
+
+        <label for="sessionSelect">Sessão:</label>
+        <select id="sessionSelect">
+            <option value="FP1">FP1</option>
+            <option value="FP2">FP2</option>
+            <option value="FP3">FP3</option>
+            <option value="Q">Qualifying</option>
+            <option value="R">Race</option>
+        </select>
+
+        <button id="loadDriversBtn">Carregar Pilotos</button>
+    </div>
+
+    <div id="trackInfo"><strong>Informações da Pista:</strong> <span id="trackDetails">Nenhuma pista carregada.</span>
+    </div>
+    <div id="sessionInfo"><strong>Informações da Sessão:</strong> <span id="sessionDetails">Nenhuma sessão
+            carregada.</span></div>
+
+    <div id="driversList"><strong>Pilotos:</strong>
+        <table id="driversTable">
+            <thead>
+                <tr>
+                    <th>Número</th>
+                    <th>Nome</th>
+                    <th>Equipe</th>
+                    <th>Posição</th>
+                    <th>Status</th>
+                    <th>Tempo</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <div style="margin-top: 20px;">
+        <label for="driverSelect">Escolha um piloto para telemetria:</label>
+        <select id="driverSelect">
+            <option value="">-- Nenhum --</option>
+        </select>
+        <button id="loadTelemetryBtn">Carregar Telemetria</button>
+    </div>
+
+    <div style="margin-top: 10px;">
+        <label for="lapSelect">Selecionar volta:</label>
+        <select id="lapSelect">
+            <option value="">-- Escolha uma volta --</option>
+        </select>
+        <button id="showLapBtn">Mostrar Volta</button>
+    </div>
+
+    <div id="chartsContainer">
+        <div class="chart-box">
+            <h3>Telemetria - Dados Multi-variáveis</h3>
+            <canvas id="telemetryChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <h3>Gráfico de Setores</h3>
+            <canvas id="sectorChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <h3>Gráfico Força G</h3>
+            <canvas id="gForceChart"></canvas>
+        </div>
+        <div class="chart-box" style="flex-basis: 100%;">
+            <h3>Heatmap da Pista (Velocidade)</h3>
+            <canvas id="heatmapCanvas" width="900" height="300"></canvas>
+        </div>
+    </div>
+
+    <div id="dashboard">
+        <h3>Dashboard Resumo da Volta</h3>
+        <p id="lapSummary">Nenhuma volta selecionada.</p>
+    </div>
+
+    <div id="playbackControls">
+        <h3>Playback da Volta</h3>
+        <button id="playBtn">▶️ Play</button>
+        <button id="pauseBtn" disabled>⏸ Pause</button>
+        <input type="range" id="playbackProgress" min="0" max="100" value="0" />
+    </div>
+
+    <script>
+        // Popula rounds de 1 a 23
+        const roundSelect = document.getElementById('roundSelect');
+        for (let i = 1; i <= 23; i++) {
+            let opt = document.createElement('option');
+            opt.value = i;
+            opt.textContent = i;
+            roundSelect.appendChild(opt);
+        }
+        roundSelect.value = 1;
+
+        const yearSelect = document.getElementById('yearSelect');
+        const sessionSelect = document.getElementById('sessionSelect');
+        const loadDriversBtn = document.getElementById('loadDriversBtn');
+        const driversTableBody = document.querySelector('#driversTable tbody');
+        const driverSelect = document.getElementById('driverSelect');
+        const loadTelemetryBtn = document.getElementById('loadTelemetryBtn');
+        const trackDetails = document.getElementById('trackDetails');
+        const sessionDetails = document.getElementById('sessionDetails');
+        const lapSelect = document.getElementById('lapSelect');
+        const showLapBtn = document.getElementById('showLapBtn');
+
+        const playBtn = document.getElementById('playBtn');
+        const pauseBtn = document.getElementById('pauseBtn');
+        const playbackProgress = document.getElementById('playbackProgress');
+
+        let lastDrivers = [];
+        let telemetryDataByLap = {};
+        let currentLapData = null;
+
+        let telemetryChart = null;
+        let sectorChart = null;
+        let gForceChart = null;
+
+        let playbackInterval = null;
+        let playbackIndex = 0;
+
+        async function loadDrivers() {
+            const year = yearSelect.value;
+            const round = roundSelect.value;
+            const session = sessionSelect.value;
+
+            try {
+                const res = await fetch(`/api/drivers?year=${year}&round=${round}&session=${session}`);
+                const drivers = await res.json();
+
+                if (drivers.error) {
+                    alert('Erro na API FastF1: ' + drivers.error);
+                    return;
+                }
+
+                driversTableBody.innerHTML = '';
+                driverSelect.innerHTML = '<option value="">-- Nenhum --</option>';
+                lapSelect.innerHTML = '<option value="">-- Escolha uma volta --</option>';
+                lastDrivers = drivers;
+
+                drivers.forEach(d => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+            <td>${d.number}</td>
+            <td>${d.name}</td>
+            <td>${d.team}</td>
+            <td>${d.position !== null ? d.position : '-'}</td>
+            <td>${d.status}</td>
+            <td>${d.time !== null ? d.time : '-'}</td>
+          `;
+                    driversTableBody.appendChild(tr);
+
+                    const opt = document.createElement('option');
+                    opt.value = d.abbr;
+                    opt.textContent = d.name + (d.position !== null ? ` (#${d.position})` : '');
+                    driverSelect.appendChild(opt);
+                });
+
+                await loadTrackAndSessionInfo(year, round, session);
+            } catch (e) {
+                alert('Erro ao carregar pilotos: ' + e.message);
+            }
+        }
+
+        async function loadTrackAndSessionInfo(year, round, session) {
+            try {
+                const res = await fetch(`/api/session_info?year=${year}&round=${round}&session=${session}`);
+                const data = await res.json();
+
+                if (data.error) {
+                    trackDetails.textContent = 'Erro ao carregar informações da pista.';
+                    sessionDetails.textContent = 'Erro ao carregar informações da sessão.';
+                    return;
+                }
+
+                trackDetails.textContent = `${data.trackName} - ${data.location} (${data.length ?? 'N/A'} km)`;
+                sessionDetails.textContent = `Sessão: ${data.sessionName}, Data: ${data.date}, Tempo previsto: ${data.scheduledTime}`;
+
+            } catch {
+                trackDetails.textContent = 'Erro ao carregar informações da pista.';
+                sessionDetails.textContent = 'Erro ao carregar informações da sessão.';
+            }
+        }
+
+        async function loadTelemetry() {
+            const year = yearSelect.value;
+            const round = roundSelect.value;
+            const session = sessionSelect.value;
+            const driver = driverSelect.value;
+
+            if (!driver) {
+                alert('Escolha um piloto antes.');
+                return;
+            }
+
+            try {
+                const res = await fetch(`/api/telemetry?year=${year}&round=${round}&session=${session}&driver=${driver}`);
+                const telemetry = await res.json();
+                console.log('telemetry recebido:', telemetry);
+
+                if (telemetry.error) {
+                    alert('Erro ao carregar telemetria: ' + telemetry.error);
+                    return;
+                }
+
+                const laps = telemetry.laps;
+
+                if (!Array.isArray(laps)) {
+                    alert('Formato inesperado dos dados de telemetria.');
+                    return;
+                }
+
+                telemetryDataByLap = {};
+                lapSelect.innerHTML = '<option value="">-- Escolha uma volta --</option>';
+
+                laps.forEach((lap) => {
+                    const lapKey = String(lap.lapNumber); // <- converte para string
+                    telemetryDataByLap[lapKey] = lap.data;
+
+                    const opt = document.createElement('option');
+                    opt.value = lapKey;
+                    opt.textContent = `Volta ${lap.lapNumber} - Tempo: ${lap.lapTime}`;
+                    lapSelect.appendChild(opt);
+                });
+
+                if (laps.length > 0) {
+                    alert('Telemetria carregada. Selecione uma volta.');
+                } else {
+                    alert('Nenhuma volta com telemetria disponível.');
+                }
+            } catch (e) {
+                alert('Erro ao carregar telemetria: ' + e.message);
+            }
+        }
+
+
+        function buildTelemetryChart(data) {
+            // Assume que data é array de pontos: {time, speed, rpm, throttle, brake, gLat, gLong, posX, posY}
+            const labels = data.map(p => p.time.toFixed(2));
+            const speedData = data.map(p => p.speed);
+            const rpmData = data.map(p => p.rpm);
+            const throttleData = data.map(p => p.throttle * 100);
+            const brakeData = data.map(p => p.brake * 100);
+
+            if (telemetryChart) telemetryChart.destroy();
+
+            const ctx = document.getElementById('telemetryChart').getContext('2d');
+            telemetryChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        { label: 'Velocidade (km/h)', data: speedData, borderColor: 'blue', fill: false, yAxisID: 'y' },
+                        { label: 'RPM', data: rpmData, borderColor: 'red', fill: false, yAxisID: 'y1' },
+                        { label: 'Acelerador (%)', data: throttleData, borderColor: 'green', fill: false, yAxisID: 'y2' },
+                        { label: 'Freio (%)', data: brakeData, borderColor: 'orange', fill: false, yAxisID: 'y2' },
+                    ]
+                },
+                options: {
+                    interaction: { mode: 'index', intersect: false },
+                    stacked: false,
+                    scales: {
+                        y: { type: 'linear', display: true, position: 'left', title: { text: 'Velocidade (km/h)' } },
+                        y1: { type: 'linear', display: true, position: 'right', grid: { drawOnChartArea: false }, title: { text: 'RPM' } },
+                        y2: {
+                            type: 'linear', display: true, position: 'right', grid: { drawOnChartArea: false },
+                            title: { text: 'Throttle/Freio (%)' },
+                            min: 0, max: 100,
+                            offset: true,
+                        },
+                        x: { title: { text: 'Tempo (s)' } }
+                    }
+                }
+            });
+        }
+
+        function buildSectorChart(data) {
+            // Mock: dividir volta em 3 setores com tempos fictícios baseados em pontos
+            // O ideal seria ter dados reais de setores
+            const sectors = [0, 0, 0];
+            if (!data.length) return;
+
+            const totalTime = data[data.length - 1].time;
+            const sectorTimes = [totalTime / 3, totalTime / 3, totalTime / 3];
+
+            if (sectorChart) sectorChart.destroy();
+
+            const ctx = document.getElementById('sectorChart').getContext('2d');
+            sectorChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['Setor 1', 'Setor 2', 'Setor 3'],
+                    datasets: [{
+                        label: 'Tempo (s)',
+                        data: sectorTimes,
+                        backgroundColor: ['#ff6384', '#36a2eb', '#cc65fe']
+                    }]
+                },
+                options: {
+                    scales: {
+                        y: { beginAtZero: true }
+                    }
+                }
+            });
+        }
+
+        function buildGForceChart(data) {
+            if (!data.length) return;
+            const labels = data.map(p => p.time.toFixed(2));
+            const gLatData = data.map(p => p.gLat);
+            const gLongData = data.map(p => p.gLong);
+
+            if (gForceChart) gForceChart.destroy();
+
+            const ctx = document.getElementById('gForceChart').getContext('2d');
+            gForceChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels,
+                    datasets: [
+                        { label: 'Força G Lateral', data: gLatData, borderColor: 'purple', fill: false },
+                        { label: 'Força G Longitudinal', data: gLongData, borderColor: 'brown', fill: false }
+                    ]
+                },
+                options: {
+                    scales: {
+                        y: { beginAtZero: false }
+                    }
+                }
+            });
+        }
+
+        function drawHeatmap(data) {
+            const canvas = document.getElementById('heatmapCanvas');
+            const ctx = canvas.getContext('2d');
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Desenha heatmap simples: círculos coloridos pela velocidade
+            data.forEach(p => {
+                const x = p.posX * canvas.width;
+                const y = p.posY * canvas.height;
+                const speedNorm = Math.min(Math.max(p.speed / 350, 0), 1); // normaliza entre 0-1
+                const color = `rgba(255, 0, 0, ${speedNorm})`;
+
+                ctx.beginPath();
+                ctx.fillStyle = color;
+                ctx.arc(x, y, 4, 0, 2 * Math.PI);
+                ctx.fill();
+            });
+        }
+
+        function updateLapSummary(lapNumber) {
+            if (!lapNumber || !telemetryDataByLap[lapNumber]) {
+                document.getElementById('lapSummary').textContent = 'Nenhuma volta selecionada.';
+                return;
+            }
+            const lapData = telemetryDataByLap[lapNumber];
+            const avgSpeed = (lapData.reduce((acc, p) => acc + p.speed, 0) / lapData.length).toFixed(1);
+            document.getElementById('lapSummary').textContent = `Volta ${lapNumber} - Velocidade média: ${avgSpeed} km/h`;
+        }
+
+        function showLap() {
+            const lapNumber = parseInt(lapSelect.value);
+            console.log('Volta selecionada:', lapNumber);
+            console.log('Voltas disponíveis:', Object.keys(telemetryDataByLap));
+
+            if (!lapNumber || !telemetryDataByLap[lapNumber]) {
+                alert('Escolha uma volta válida.');
+                return;
+            }
+
+            currentLapData = telemetryDataByLap[lapNumber];
+            buildTelemetryChart(currentLapData);
+            buildSectorChart(currentLapData);
+            buildGForceChart(currentLapData);
+            drawHeatmap(currentLapData);
+            updateLapSummary(lapNumber);
+
+            playbackIndex = 0;
+            playbackProgress.max = currentLapData.length - 1;
+            playbackProgress.value = 0;
+            playBtn.disabled = false;
+            pauseBtn.disabled = true;
+        }
+
+
+        function playbackStep() {
+            if (!currentLapData) return;
+            if (playbackIndex >= currentLapData.length) {
+                clearInterval(playbackInterval);
+                playBtn.disabled = false;
+                pauseBtn.disabled = true;
+                return;
+            }
+            // Aqui podemos, se quiser, atualizar algum indicador de telemetria em tempo real conforme playbackIndex
+            playbackProgress.value = playbackIndex;
+            playbackIndex++;
+        }
+
+        function startPlayback() {
+            if (!currentLapData) return;
+            playBtn.disabled = true;
+            pauseBtn.disabled = false;
+
+            playbackInterval = setInterval(playbackStep, 50); // 20 fps
+        }
+
+        function pausePlayback() {
+            clearInterval(playbackInterval);
+            playBtn.disabled = false;
+            pauseBtn.disabled = true;
+        }
+
+        function seekPlayback(event) {
+            playbackIndex = parseInt(event.target.value);
+            // Poderia atualizar o indicador aqui também
+        }
+
+        loadDriversBtn.addEventListener('click', loadDrivers);
+        loadTelemetryBtn.addEventListener('click', loadTelemetry);
+        showLapBtn.addEventListener('click', showLap);
+        playBtn.addEventListener('click', startPlayback);
+        pauseBtn.addEventListener('click', pausePlayback);
+        playbackProgress.addEventListener('input', seekPlayback);
+    </script>
+
+</body>
+
+</html>

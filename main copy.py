@@ -11,7 +11,6 @@ import pandas as pd
 import threading
 import time
 import os
-import traceback
 
 app = Flask(__name__)
 
@@ -27,6 +26,9 @@ firebase_admin.initialize_app(
         "databaseURL": "https://f1-cloud-lvtl-default-rtdb.europe-west1.firebasedatabase.app/"
     },
 )
+
+SESSIONS = ["FP1", "FP2", "FP3", "Q", "R"]
+
 
 def get_event_schedule(year):
     from fastf1.events import get_event_schedule as ges
@@ -284,6 +286,151 @@ def analysis():
 def replay():
     return render_template("replay.html")
 
+@app.route("/api/live_positions")
+def live_positions():
+    import numpy as np
+
+    try:
+        now = datetime.datetime.now(pytz.utc)
+        schedule = fastf1.get_event_schedule(now.year, include_testing=False)
+
+        # Obter última sessão válida
+        schedule = schedule.dropna(subset=[f"Session{i}DateUtc" for i in range(1, 6)], how='all')
+        past_sessions = []
+        for i in range(1, 6):
+            date_col = f"Session{i}DateUtc"
+            name_col = f"Session{i}"
+            if date_col in schedule.columns and name_col in schedule.columns:
+                schedule[date_col] = pd.to_datetime(schedule[date_col], utc=True)
+                recent = schedule[schedule[date_col] <= now]
+                if not recent.empty:
+                    last = recent.iloc[-1]
+                    past_sessions.append((int(last["RoundNumber"]), last[name_col]))
+
+        if not past_sessions:
+            return jsonify([])
+
+        rnd, session_name = past_sessions[-1]
+        session = fastf1.get_session(now.year, rnd, session_name)
+        session.load(telemetry=False, laps=False, weather=False, messages=False)
+
+        pos_data = session.position_data
+        if pos_data.empty:
+            return jsonify([])
+
+        latest_time = pos_data.index.get_level_values(1).max()
+        latest_positions = pos_data.xs(latest_time, level=1)
+
+        # Normalize positions for rendering
+        x_vals = latest_positions["X"].astype(float)
+        y_vals = latest_positions["Y"].astype(float)
+        min_x, max_x = x_vals.min(), x_vals.max()
+        min_y, max_y = y_vals.min(), y_vals.max()
+
+        norm_x = ((x_vals - min_x) / (max_x - min_x)) * 100
+        norm_y = ((y_vals - min_y) / (max_y - min_y)) * 100
+
+        drivers = latest_positions.index
+        data = [
+            {"driver_number": driver, "x": float(x), "y": float(y)}
+            for driver, x, y in zip(drivers, norm_x, norm_y)
+        ]
+
+        return jsonify(data)
+
+    except Exception as e:
+        print(f"[ERROR] FastF1 /api/live_positions: {e}")
+        return jsonify([])
+
+
+@app.route("/api/replay_telemetry")
+def replay_telemetry():
+    session_key = request.args.get("session_key")
+    start = int(request.args.get("start", 0))
+    step = int(request.args.get("step", 7))
+
+    try:
+        end_time = datetime.datetime.utcnow()
+        start_time = end_time - datetime.timedelta(seconds=step)
+
+        # Formata as datas no formato ISO para usar nos parâmetros da OpenF1
+        start_iso = start_time.isoformat()
+        end_iso = end_time.isoformat()
+
+        url = f"https://api.openf1.org/v1/location?session_key={session_key}&date>={start_iso}&date<={end_iso}"
+        response = urlopen(url)
+        data = json.loads(response.read().decode())
+
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/compare")
+def api_compare():
+    driver1 = request.args.get("driver1")
+    driver2 = request.args.get("driver2")
+    year = int(request.args.get("year", 2024))
+    round_ = int(request.args.get("round", 1))
+    session_name = request.args.get("session", "R")
+
+    try:
+        session = fastf1.get_session(year, round_, session_name)
+        session.load()
+
+        laps1 = session.laps.pick_driver(driver1)
+        laps2 = session.laps.pick_driver(driver2)
+
+        best1 = laps1.pick_fastest().get("LapTime")
+        best2 = laps2.pick_fastest().get("LapTime")
+
+        return jsonify(
+            {
+                "driver1": {"name": driver1, "best_lap": str(best1)},
+                "driver2": {"name": driver2, "best_lap": str(best2)},
+            }
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/drivers")
+def drivers():
+    year = int(request.args.get("year", 2024))
+    round_ = int(request.args.get("round", 1))
+    session_name = request.args.get("session", "FP1")
+    if session_name not in SESSIONS:
+        session_name = "FP1"
+    try:
+        session = fastf1.get_session(year, round_, session_name)
+        session.load()
+
+        results = session.results
+        results["Time"] = results["Time"].fillna(pd.Timedelta(0))
+        results["Position"] = results["Position"].fillna(0).astype(int)
+        results["Status"] = results["Status"].fillna("Unknown")
+
+        drivers_list = []
+        for _, row in results.iterrows():
+            drivers_list.append(
+                {
+                    "number": row["DriverNumber"],
+                    "name": row["BroadcastName"],
+                    "abbr": row["Abbreviation"],
+                    "team": row["TeamName"],
+                    "position": row["Position"],
+                    "status": row["Status"],
+                    "time": str(row["Time"]) if pd.notnull(row["Time"]) else None,
+                }
+            )
+
+        return jsonify(drivers_list)
+
+    except Exception as e:
+        print(f"Erro ao buscar dados: {e}")
+        return jsonify({"error": f"Erro ao buscar dados: {str(e)}"}), 500
+
 
 @app.route("/api/session_info")
 def session_info():
@@ -330,6 +477,30 @@ def session_info():
     except Exception as e:
         print(f"Erro ao carregar info da sessão: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/track")
+def track():
+    year = int(request.args.get("year", 2024))
+    round_ = int(request.args.get("round", 1))
+
+    try:
+        session = fastf1.get_session(year, round_, "FP1")
+        session.load()
+
+        event = session.event
+        location = event["Location"]
+
+        track_info = {
+            "circuit_name": event["EventName"],
+            "track_name": session.track_name,
+            "location": f"{location['Locality']}, {location['Country']}",
+            "date": str(session.date),
+        }
+        return jsonify(track_info)
+    except Exception as e:
+        print(f"Erro ao buscar circuito: {e}")
+        return jsonify({"error": f"Erro ao buscar circuito: {str(e)}"}), 500
 
 
 @app.route("/api/track_map")
@@ -386,390 +557,6 @@ def track_map():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/race_summary")
-def race_summary():
-    try:
-        laps_data = json.loads(
-            urlopen("https://api.openf1.org/v1/laps?session_key=latest").read().decode()
-        )
-        flags_data = json.loads(
-            urlopen("https://api.openf1.org/v1/race_control?session_key=latest")
-            .read()
-            .decode()
-        )
-
-        # Voltas por piloto
-        summary = {}
-        for lap in laps_data:
-            num = lap["driver_number"]
-            summary[num] = summary.get(num, 0) + 1
-        summary_list = [{"driver_number": k, "laps": v} for k, v in summary.items()]
-
-        # Eventos relevantes (flags, pits, etc.)
-        eventos = []
-        for f in flags_data:
-            if any(k in f["message"].upper() for k in ["PIT", "FLAG", "SC", "VSC"]):
-                eventos.append(
-                    {
-                        "driver_number": f.get("driver_number"),
-                        "message": f["message"],
-                        "date": f["date"],
-                    }
-                )
-
-        return jsonify({"summary": summary_list, "events": eventos})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/team_radio")
-def team_radio():
-    try:
-        data = json.loads(
-            urlopen("https://api.openf1.org/v1/team_radio?session_key=latest")
-            .read()
-            .decode()
-        )
-        return jsonify(data[-10:])  # últimos 10 áudios
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/penalties")
-def penalties():
-    try:
-        data = json.loads(
-            urlopen("https://api.openf1.org/v1/race_control?session_key=latest")
-            .read()
-            .decode()
-        )
-        penalties = [d for d in data if "PENALTY" in d["message"].upper()]
-        return jsonify(penalties)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    
-    # NOVA SHIT
-
-@app.route("/api/replay_data")
-def replay_data():
-    from datetime import timedelta
-    from math import hypot
-    from collections import defaultdict
-    import numpy as np
-
-    year = int(request.args.get("year", 2024))
-    round_ = int(request.args.get("round", 1))
-    session_name = request.args.get("session", "R")
-
-    try:
-        session = fastf1.get_session(year, round_, session_name)
-        session.load(telemetry=True, laps=False, weather=False, messages=False)
-
-        driver_map = {str(drv): session.get_driver(drv)['FullName'] for drv in session.drivers}
-        pos_dict = session.pos_data
-
-        dfs = []
-        for drv, df in pos_dict.items():
-            if df is not None and not df.empty:
-                df = df.copy()
-                df["Driver"] = drv
-                dfs.append(df)
-
-        if not dfs:
-            return jsonify([])
-
-        pos_data = pd.concat(dfs)
-        pos_data.set_index(["Driver", "Date"], inplace=True)
-
-        # Ignorar os primeiros 4 minutos
-        min_time = pos_data.index.get_level_values(1).min() + timedelta(minutes=5)
-        filtered = pos_data[pos_data.index.get_level_values(1) >= min_time]
-
-        # Estimar a linha de partida: posição mais frequente após 4 min
-        positions = filtered.reset_index()[["X", "Y"]].dropna()
-        positions["x_rounded"] = positions["X"].round(-1)
-        positions["y_rounded"] = positions["Y"].round(-1)
-        start_group = positions.groupby(["x_rounded", "y_rounded"]).size().idxmax()
-        start_line = (start_group[0], start_group[1])
-        print(f"[DEBUG] Linha de partida estimada: {start_line}")
-
-        def dist(a, b):
-            return hypot(a[0] - b[0], a[1] - b[1])
-
-        # Distância acumulada por piloto
-        distances = defaultdict(float)
-        last_positions = {}
-
-        interval = timedelta(seconds=5)
-        times = sorted(set(filtered.index.get_level_values(1)))
-        sampled_times = []
-        current = times[0]
-        for t in times:
-            if t >= current:
-                sampled_times.append(t)
-                current += interval
-
-        frames = []
-        for t in sampled_times:
-            snapshot = filtered.xs(t, level=1, drop_level=False)
-            frame = []
-            for idx, row in snapshot.iterrows():
-                driver = idx[0]  # Apenas o número do piloto (str)
-
-                x, y = row["X"], row["Y"]
-                if pd.isna(x) or pd.isna(y):
-                    continue
-
-                if driver not in last_positions:
-                    last_positions[driver] = (x, y)
-                    distances[driver] = dist((x, y), start_line)
-                else:
-                    last_pos = last_positions[driver]
-                    delta = dist((x, y), last_pos)
-                    distances[driver] += delta
-                    last_positions[driver] = (x, y)
-
-                frame.append({
-                    "driver_number": str(driver),
-                    "driver_name": driver_map.get(str(driver), f"Piloto {driver}"),
-                    "x": float(x),
-                    "y": float(y),
-                    "distance": distances[driver]
-                })
-
-            # Ordenar por distância percorrida (maior distância = 1º lugar)
-            frame.sort(key=lambda d: -d["distance"])
-            for i, d in enumerate(frame):
-                d["position"] = i + 1
-
-            frames.append({
-                "time": str(t),
-                "positions": frame
-            })
-
-        print(f"[DEBUG] Total frames gerados: {len(frames)}")
-        return jsonify(frames)
-
-    except Exception as e:
-        print(f"[REPLAY ERROR] {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-
-    
-
-@app.route("/api/track_layout")
-def track_layout():
-    from datetime import timedelta
-
-    year = int(request.args.get("year", 2024))
-    round_ = int(request.args.get("round", 1))
-    session_name = request.args.get("session", "R")
-
-    try:
-        session = fastf1.get_session(year, round_, session_name)
-        session.load(telemetry=True, laps=False, weather=False, messages=False)
-
-        pos_dict = session.pos_data
-
-        if not pos_dict:
-            print("[DEBUG] pos_data está vazio (dict)")
-            return jsonify([])
-
-        # Combina os DataFrames dos pilotos
-        dfs = []
-        for drv, df in pos_dict.items():
-            if df is not None and not df.empty:
-                df = df.copy()
-                df["Driver"] = drv
-                dfs.append(df)
-
-        if not dfs:
-            print("[DEBUG] Nenhum DataFrame válido em pos_data")
-            return jsonify([])
-
-        pos_data = pd.concat(dfs)
-        pos_data.set_index(["Driver", "Date"], inplace=True)
-
-        # Seleciona o piloto com mais dados como base do traçado
-        traj_por_driver = pos_data.groupby("Driver").size()
-        base_driver = traj_por_driver.idxmax()
-
-        traj = pos_data.xs(base_driver, level="Driver")
-        traj = traj.dropna(subset=["X", "Y"])
-
-        path_points = [{"x": float(row.X), "y": float(row.Y)} for _, row in traj.iterrows()]
-        print(f"[TRACK DEBUG] Traçado com {len(path_points)} pontos para piloto {base_driver}")
-        return jsonify(path_points)
-
-    except Exception as e:
-        print(f"[TRACK LAYOUT ERROR] {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-
-
-
-
-
-
-
-
-
-
-''' ROUTES NOT IN USE '''
-
-''' route not in use '''
-@app.route("/api/live_positions")
-def live_positions():
-    import numpy as np
-
-    try:
-        now = datetime.datetime.now(pytz.utc)
-        schedule = fastf1.get_event_schedule(now.year, include_testing=False)
-
-        # Obter última sessão válida
-        schedule = schedule.dropna(subset=[f"Session{i}DateUtc" for i in range(1, 6)], how='all')
-        past_sessions = []
-        for i in range(1, 6):
-            date_col = f"Session{i}DateUtc"
-            name_col = f"Session{i}"
-            if date_col in schedule.columns and name_col in schedule.columns:
-                schedule[date_col] = pd.to_datetime(schedule[date_col], utc=True)
-                recent = schedule[schedule[date_col] <= now]
-                if not recent.empty:
-                    last = recent.iloc[-1]
-                    past_sessions.append((int(last["RoundNumber"]), last[name_col]))
-
-        if not past_sessions:
-            return jsonify([])
-
-        rnd, session_name = past_sessions[-1]
-        session = fastf1.get_session(now.year, rnd, session_name)
-        session.load(telemetry=False, laps=False, weather=False, messages=False)
-
-        pos_data = session.get_pos_data()
-        if pos_data is None or pos_data.empty:
-            return jsonify([])
-
-        latest_time = pos_data.index.get_level_values(1).max()
-        latest_positions = pos_data.xs(latest_time, level=1)
-
-        # Normalize positions for rendering
-        x_vals = latest_positions["X"].astype(float)
-        y_vals = latest_positions["Y"].astype(float)
-        min_x, max_x = x_vals.min(), x_vals.max()
-        min_y, max_y = y_vals.min(), y_vals.max()
-
-        norm_x = ((x_vals - min_x) / (max_x - min_x)) * 100
-        norm_y = ((y_vals - min_y) / (max_y - min_y)) * 100
-
-        drivers = latest_positions.index
-        data = [
-            {"driver_number": driver, "x": float(x), "y": float(y)}
-            for driver, x, y in zip(drivers, norm_x, norm_y)
-        ]
-
-        return jsonify(data)
-
-    except Exception as e:
-        print(f"[ERROR] FastF1 /api/live_positions: {e}")
-        return jsonify([])
-
-
-''' route not in use '''
-@app.route("/api/replay_telemetry")
-def replay_telemetry():
-    session_key = request.args.get("session_key")
-    start = int(request.args.get("start", 0))
-    step = int(request.args.get("step", 7))
-
-    try:
-        end_time = datetime.datetime.utcnow()
-        start_time = end_time - datetime.timedelta(seconds=step)
-
-        # Formata as datas no formato ISO para usar nos parâmetros da OpenF1
-        start_iso = start_time.isoformat()
-        end_iso = end_time.isoformat()
-
-        url = f"https://api.openf1.org/v1/location?session_key={session_key}&date>={start_iso}&date<={end_iso}"
-        response = urlopen(url)
-        data = json.loads(response.read().decode())
-
-        return jsonify(data)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-''' route not in use '''
-@app.route("/api/compare")
-def api_compare():
-    driver1 = request.args.get("driver1")
-    driver2 = request.args.get("driver2")
-    year = int(request.args.get("year", 2024))
-    round_ = int(request.args.get("round", 1))
-    session_name = request.args.get("session", "R")
-
-    try:
-        session = fastf1.get_session(year, round_, session_name)
-        session.load()
-
-        laps1 = session.laps.pick_driver(driver1)
-        laps2 = session.laps.pick_driver(driver2)
-
-        best1 = laps1.pick_fastest().get("LapTime")
-        best2 = laps2.pick_fastest().get("LapTime")
-
-        return jsonify(
-            {
-                "driver1": {"name": driver1, "best_lap": str(best1)},
-                "driver2": {"name": driver2, "best_lap": str(best2)},
-            }
-        )
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-''' route not in use '''
-@app.route("/api/drivers")
-def drivers():
-    year = int(request.args.get("year", 2024))
-    round_ = int(request.args.get("round", 1))
-    session_name = request.args.get("session", "FP1")
-    if session_name not in SESSIONS:
-        session_name = "FP1"
-    try:
-        session = fastf1.get_session(year, round_, session_name)
-        session.load()
-
-        results = session.results
-        results["Time"] = results["Time"].fillna(pd.Timedelta(0))
-        results["Position"] = results["Position"].fillna(0).astype(int)
-        results["Status"] = results["Status"].fillna("Unknown")
-
-        drivers_list = []
-        for _, row in results.iterrows():
-            drivers_list.append(
-                {
-                    "number": row["DriverNumber"],
-                    "name": row["BroadcastName"],
-                    "abbr": row["Abbreviation"],
-                    "team": row["TeamName"],
-                    "position": row["Position"],
-                    "status": row["Status"],
-                    "time": str(row["Time"]) if pd.notnull(row["Time"]) else None,
-                }
-            )
-
-        return jsonify(drivers_list)
-
-    except Exception as e:
-        print(f"Erro ao buscar dados: {e}")
-        return jsonify({"error": f"Erro ao buscar dados: {str(e)}"}), 500
-
-
-''' route not in use '''
 @app.route("/api/telemetry")
 def telemetry():
     year = int(request.args.get("year"))
@@ -831,32 +618,6 @@ def telemetry():
         return jsonify({"error": "Erro ao buscar telemetria: " + str(e)})
 
 
-''' route not in use '''
-@app.route("/api/track")
-def track():
-    year = int(request.args.get("year", 2024))
-    round_ = int(request.args.get("round", 1))
-
-    try:
-        session = fastf1.get_session(year, round_, "FP1")
-        session.load()
-
-        event = session.event
-        location = event["Location"]
-
-        track_info = {
-            "circuit_name": event["EventName"],
-            "track_name": session.track_name,
-            "location": f"{location['Locality']}, {location['Country']}",
-            "date": str(session.date),
-        }
-        return jsonify(track_info)
-    except Exception as e:
-        print(f"Erro ao buscar circuito: {e}")
-        return jsonify({"error": f"Erro ao buscar circuito: {str(e)}"}), 500
-
-
-''' route not in use '''
 @app.route("/api/live_dashboard")
 def live_dashboard():
     session_key = request.args.get("session_key", "latest")
@@ -962,7 +723,69 @@ def live_dashboard():
         return jsonify({"error": str(e)}), 500
 
 
-''' route not in use '''
+@app.route("/api/race_summary")
+def race_summary():
+    try:
+        laps_data = json.loads(
+            urlopen("https://api.openf1.org/v1/laps?session_key=latest").read().decode()
+        )
+        flags_data = json.loads(
+            urlopen("https://api.openf1.org/v1/race_control?session_key=latest")
+            .read()
+            .decode()
+        )
+
+        # Voltas por piloto
+        summary = {}
+        for lap in laps_data:
+            num = lap["driver_number"]
+            summary[num] = summary.get(num, 0) + 1
+        summary_list = [{"driver_number": k, "laps": v} for k, v in summary.items()]
+
+        # Eventos relevantes (flags, pits, etc.)
+        eventos = []
+        for f in flags_data:
+            if any(k in f["message"].upper() for k in ["PIT", "FLAG", "SC", "VSC"]):
+                eventos.append(
+                    {
+                        "driver_number": f.get("driver_number"),
+                        "message": f["message"],
+                        "date": f["date"],
+                    }
+                )
+
+        return jsonify({"summary": summary_list, "events": eventos})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/team_radio")
+def team_radio():
+    try:
+        data = json.loads(
+            urlopen("https://api.openf1.org/v1/team_radio?session_key=latest")
+            .read()
+            .decode()
+        )
+        return jsonify(data[-10:])  # últimos 10 áudios
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/penalties")
+def penalties():
+    try:
+        data = json.loads(
+            urlopen("https://api.openf1.org/v1/race_control?session_key=latest")
+            .read()
+            .decode()
+        )
+        penalties = [d for d in data if "PENALTY" in d["message"].upper()]
+        return jsonify(penalties)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/current_session")
 def current_session():
     try:
@@ -1008,7 +831,6 @@ def current_session():
         return jsonify({"error": str(e)}), 500
 
 
-''' route not in use '''
 @app.route("/api/session_details_openf1")
 def session_details_openf1():
     try:
@@ -1039,7 +861,3 @@ def session_details_openf1():
 
 if __name__ == "__main__":
     app.run(debug=True, use_reloader=False)
-
-
-''' ROtas novas '''
-

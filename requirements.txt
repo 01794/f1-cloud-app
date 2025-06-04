@@ -1,5 +1,7 @@
-flask
+Flask
 firebase-admin
 google-cloud-storage
 gunicorn
+pandas
 requests
+fastf1

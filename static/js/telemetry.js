@@ -1,39 +1,64 @@
-function fetchTelemetry() {
-  const tbody = document.getElementById('telemetry-body');
-  tbody.innerHTML = ''; // limpa antes de inserir
+firebase.database().ref('/live_telemetry').on('value', snapshot => {
+  const data = snapshot.val();
+  console.log("Firebase conectado, dados de /live_telemetry:", data);
+  updateTelemetryTable(data || []);
+});
 
-  firebase.database().ref("/live_telemetry").once("value")
-    .then(snapshot => {
-      const data = snapshot.val();
+function updateTelemetryTable(data) {
+  const tbody = document.getElementById("telemetry-body");
+  tbody.innerHTML = "";
 
-      if (!data || !Array.isArray(data)) return;
+  const pilotos = Object.values(data)
+    .filter(p => p && p.driver_number)
+    .sort((a, b) => (a.position || 99) - (b.position || 99));
 
-      data.forEach(d => {
-        const row = document.createElement('tr');
-        const pitStatus = d.in_pit ? '✅' : '';
-        const tyreClass = {
-          SOFT: 'red',
-          MEDIUM: 'yellow',
-          HARD: 'white'
-        }[d.tyre?.toUpperCase()] || 'gray';
+  for (const piloto of pilotos) {
+    const tr = document.createElement("tr");
 
-        row.innerHTML = `
-          <td>${pitStatus}</td>
-          <td>${d.position ?? '-'}</td>
-          <td>${d.driver_number}</td>
-          <td>${d.driver_name}</td>
-          <td style="color: ${tyreClass}; font-weight: bold;">${d.tyre}</td>
-          <td>${d.interval_to_car_ahead !== null && d.interval_to_car_ahead !== undefined ? '+' + d.interval_to_car_ahead.toFixed(3) + 's' : '-'}</td>
-          <td>${d.last_lap_time ? Number(d.last_lap_time).toFixed(3) + 's' : '-'}</td>
-          <td>${d.sector_1 !== undefined ? Number(d.sector_1).toFixed(3) + 's' : '-'}</td>
-          <td>${d.sector_2 !== undefined ? Number(d.sector_2).toFixed(3) + 's' : '-'}</td>
-          <td>${d.sector_3 !== undefined ? Number(d.sector_3).toFixed(3) + 's' : '-'}</td>
-        `;
-        tbody.appendChild(row);
-      });
-    })
-    .catch(err => console.error("Erro ao carregar do Firebase:", err));
+    const fields = [
+      piloto.in_pit ? "🛠" : "",
+      piloto.position ?? "",
+      piloto.driver_number ?? "",
+      piloto.driver_name ?? "",
+      piloto.tyre ?? "",
+      piloto.interval_to_car_ahead ?? "",
+      piloto.last_lap_time ?? "",
+      piloto.sector_1 ?? "",
+      piloto.sector_2 ?? "",
+      piloto.sector_3 ?? ""
+    ];
+
+    const keys = [
+      "in_pit", "position", "driver_number", "driver_name", "tyre",
+      "interval_to_car_ahead", "last_lap_time", "sector_1", "sector_2", "sector_3"
+    ];
+
+    fields.forEach((value, i) => {
+      const key = keys[i];
+      const td = document.createElement("td");
+      td.textContent = value;
+      td.classList.add("telemetry-cell");
+
+      // Cor de pneus
+      if (key === "tyre") {
+        if (value === "SOFT") td.style.color = "red";
+        else if (value === "MEDIUM") td.style.color = "orange";
+        else if (value === "HARD") td.style.color = "white";
+        else td.style.color = "gray";
+      }
+
+      // Destaques de setores
+      if (["sector_1", "sector_2", "sector_3"].includes(key)) {
+        const floatVal = parseFloat(value);
+        if (!isNaN(floatVal)) {
+          if (floatVal < 30) td.style.backgroundColor = "#cfc"; // verde claro (bom)
+          else if (floatVal > 40) td.style.backgroundColor = "#fbb"; // vermelho claro (ruim)
+        }
+      }
+
+      tr.appendChild(td);
+    });
+
+    tbody.appendChild(tr);
+  }
 }
-
-setInterval(fetchTelemetry, 2000);
-fetchTelemetry();
