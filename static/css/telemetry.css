@@ -54,7 +54,8 @@ body {
   gap: 2px;
 }
 
-.telemetry, .map {
+.telemetry,
+.map {
   background-color: #2a2a2a;
   padding: 10px;
 }
@@ -76,7 +77,8 @@ table {
   border-collapse: collapse;
 }
 
-th, td {
+th,
+td {
   padding: 6px;
   text-align: center;
   border-bottom: 1px solid #444;
@@ -92,4 +94,127 @@ th, td {
   width: 20px;
   height: auto;
   margin-left: 10px;
+}
+
+.telemetry-table {
+  max-height: 400px;
+  overflow-y: auto;
+  border: 1px solid #ccc;
+}
+
+.telemetry-table table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.telemetry-table th,
+.telemetry-table td {
+  border: 1px solid #999;
+  padding: 6px 10px;
+  text-align: center;
+}
+
+.telemetry-table thead th {
+  position: sticky;
+  top: 0;
+  background-color: #222;
+  color: white;
+  z-index: 2;
+}
+
+.telemetry table thead th {
+  position: sticky;
+  top: 0;
+  background-color: #1e1e1e;
+  z-index: 10;
+}
+
+#telemetry-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+#telemetry-table td,
+#telemetry-table th {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+body {
+  background-color: #2a2a2a;
+}
+
+.nav-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 70vh;
+  gap: 40px;
+}
+
+.nav-box {
+  width: 200px;
+  height: 200px;
+  background-color: rgb(163, 161, 161);
+  border: 5px solid #000000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  font-size: 20px;
+  font-weight: bold;
+  transition: all 0.3s ease;
+  text-decoration: none;
+  color: black;
+}
+
+.nav-box:hover {
+  transform: scale(1.05);
+  background-color: #e0e0e0;
+}
+
+/* CONTROLES DE FILTRO E TELEMETRIA */
+.controls,
+.telemetry-controls,
+.lap-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 15px;
+  align-items: center;
+  background-color: #1e1e1e;
+  padding: 15px 20px;
+  margin: 10px 0;
+  border-radius: 6px;
+}
+
+.controls label,
+.telemetry-controls label,
+.lap-controls label {
+  font-weight: bold;
+  color: #ff3c3c;
+  margin-right: 5px;
+}
+
+select,
+button {
+  padding: 6px 12px;
+  border-radius: 5px;
+  border: 1px solid #333;
+  background-color: #2a2a2a;
+  color: #fff;
+  font-size: 14px;
+  transition: background-color 0.2s ease;
+}
+
+button:hover {
+  background-color: #ff3c3c;
+  cursor: pointer;
+}
+
+select:focus,
+button:focus {
+  outline: none;
+  border-color: #ff3c3c;
+  box-shadow: 0 0 0 2px rgba(255, 60, 60, 0.3);
 }

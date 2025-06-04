@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="pt">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -10,27 +11,23 @@
   <script src="/static/js/firebase.js" defer></script>
   <script src="/static/js/telemetry.js" defer></script>
   <script src="/static/js/trackmap.js" defer></script>
+  <script src="/static/js/dashboard_extras.js" defer></script>
 </head>
+
 <body>
   <div class="container">
     <div class="sidebar">
       <h2>F1 LVTL</h2>
-      <a href="index.html">🏁 Index</a>
-      <a href="compare.html">📊 Compare</a>
+      <a href="/index">🏁 Index</a>
+      <a href="/analysis">📊 Analysis</a>
+      <a href="/replay">⏪ Replay</a>
     </div>
 
     <div class="header">
-      <div>
-        <img src="flag.png" alt="Bandeira" class="flag-icon" />
-        GP Nome - Sessão - Tempo Sessão
-      </div>
-      <div>
-        Asfalto: 35°C | Ar: 29°C | Humidade: 60% |
-        <img src="sun.png" alt="Clima" class="weather-icon" /> |
-        Vento: 12km/h NE |
-        <span style="color: yellow;">⚑ Bandeira Amarela</span>
-      </div>
+      <div id="session-info">Carregando sessão atual...</div>
+      <div id="session-details" style="text-align: right;">Carregando clima e volta...</div>
     </div>
+
 
     <div class="telemetry-and-map">
       <div class="telemetry">
@@ -55,15 +52,29 @@
       </div>
       <div class="map">
         <h3>Mapa do Circuito</h3>
-        <svg id="track-map" viewBox="0 0 4000 4000" style="width: 100%; height: 400px; background-color: #111;"></svg>
+        <canvas id="track-canvas" width="4000" height="4000" style="width: 100%; height: 400px; background-color: #111;"></canvas>
       </div>
     </div>
 
     <div class="bottom-tables">
-      <div class="bottom-table"><h4>Resumo Corrida</h4></div>
-      <div class="bottom-table"><h4>Rádios Pilotos</h4></div>
-      <div class="bottom-table"><h4>Penalidades</h4></div>
+      <div class="bottom-table" id="race-summary">
+        <h2>Resumo da Corrida</h2>
+        <ul id="summary-list"></ul>
+        <ul id="event-list"></ul>
+      </div>
+
+      <div class="bottom-table" id="team-radio">
+        <h2>Rádios</h2>
+        <ul id="radio-list"></ul>
+      </div>
+
+      <div class="bottom-table" id="penalties">
+        <h2>Penalidades</h2>
+        <ul id="penalty-list"></ul>
+      </div>
+
     </div>
   </div>
 </body>
+
 </html>

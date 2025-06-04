@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Replay de Sessão</title>
+  <link rel="stylesheet" href="/static/css/telemetry.css" />
+</head>
+<body>
+  <div class="container">
+    <div class="sidebar">
+      <h2>F1 REPLAY</h2>
+      <a href="/">🏁 Live</a>
+      <a href="/analysis">📊 Analysis</a>
+    </div>
+
+    <div class="header">
+      <label for="sessionKey">Session Key:</label>
+      <input type="text" id="sessionKey" value="9165" />
+      <button onclick="startReplay()">Visualizar Sessão</button>
+    </div>
+
+    <div class="map">
+      <h3>Replay do Mapa</h3>
+      <svg id="replay-map" viewBox="0 0 4000 4000" style="width: 100%; height: 500px; background-color: #111;"></svg>
+    </div>
+  </div>
+
+  <script>
+    let replayInterval;
+    let currentStart = 0;
+
+    function startReplay() {
+      clearInterval(replayInterval);
+      currentStart = 0;
+
+      const sessionKey = document.getElementById('sessionKey').value;
+      replayInterval = setInterval(() => {
+        fetch(`/api/replay_telemetry?session_key=${sessionKey}&start=${currentStart}`)
+          .then(res => res.json())
+          .then(data => {
+            const svg = document.getElementById('replay-map');
+            svg.innerHTML = '';
+
+            const latestByDriver = {};
+            data.forEach(car => {
+              if (!car.x || !car.y) return;
+              const num = car.driver_number;
+              if (!latestByDriver[num] || new Date(car.date) > new Date(latestByDriver[num].date)) {
+                latestByDriver[num] = car;
+              }
+            });
+
+            Object.values(latestByDriver).forEach(car => {
+              const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+              circle.setAttribute("cx", car.x);
+              circle.setAttribute("cy", car.y);
+              circle.setAttribute("r", 18);
+              circle.setAttribute("fill", "blue");
+              circle.setAttribute("stroke", "#fff");
+
+              const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+              label.setAttribute("x", car.x);
+              label.setAttribute("y", car.y - 25);
+              label.setAttribute("fill", "#fff");
+              label.setAttribute("font-size", "20");
+              label.setAttribute("text-anchor", "middle");
+              label.textContent = car.driver_number;
+
+              svg.appendChild(circle);
+              svg.appendChild(label);
+            });
+
+            currentStart += 7;
+          });
+      }, 7000);
+    }
+  </script>
+</body>
+</html>

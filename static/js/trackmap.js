@@ -1,43 +1,64 @@
-function fetchCarLocations() {
-  fetch('https://api.openf1.org/v1/location?session_key=latest')
-    .then(response => response.json())
-    .then(data => {
-      const svg = document.getElementById('track-map');
-      svg.innerHTML = '';
+document.addEventListener("DOMContentLoaded", () => {
+  const canvas = document.getElementById("track-canvas");
+  const ctx = canvas.getContext("2d");
 
-      const latestByDriver = {};
+  let trackData = [];
+  let positions = [];
 
-      data.forEach(entry => {
-        const num = entry.driver_number;
-        if (!latestByDriver[num] || new Date(entry.date) > new Date(latestByDriver[num].date)) {
-          latestByDriver[num] = entry;
-        }
-      });
+  function drawTrack() {
+    if (!ctx || !trackData.length) return;
 
-      Object.values(latestByDriver).forEach(car => {
-        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-        circle.setAttribute("cx", car.x);
-        circle.setAttribute("cy", car.y);
-        circle.setAttribute("r", 20);
-        circle.setAttribute("fill", "#" + (Math.random() * 0xFFFFFF << 0).toString(16).padStart(6, '0'));
-        circle.setAttribute("stroke", "#fff");
-        circle.setAttribute("stroke-width", 2);
-        circle.setAttribute("opacity", 0.85);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-        label.setAttribute("x", car.x);
-        label.setAttribute("y", car.y - 25);
-        label.setAttribute("fill", "#fff");
-        label.setAttribute("font-size", "30");
-        label.setAttribute("text-anchor", "middle");
-        label.textContent = car.driver_number;
+    // Desenhar o traçado
+    ctx.beginPath();
+    trackData.forEach((point, index) => {
+      const x = (point.x / 100) * canvas.width;
+      const y = (point.y / 100) * canvas.height;
+      if (index === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    });
+    ctx.strokeStyle = "white";
+    ctx.lineWidth = 2;
+    ctx.stroke();
 
-        svg.appendChild(circle);
-        svg.appendChild(label);
-      });
-    })
-    .catch(err => console.error("Erro ao carregar mapa:", err));
-}
+    // Desenhar os carros
+    positions.forEach((car) => {
+      const x = (car.x / 100) * canvas.width;
+      const y = (car.y / 100) * canvas.height;
+      ctx.beginPath();
+      ctx.arc(x, y, 6, 0, 2 * Math.PI);
+      ctx.fillStyle = "red";
+      ctx.fill();
+      ctx.fillStyle = "white";
+      ctx.font = "12px Arial";
+      ctx.fillText(car.driver_number, x - 5, y - 8);
+    });
+  }
 
-setInterval(fetchCarLocations, 2000);
-fetchCarLocations();
+  async function fetchTrackData() {
+    const res = await fetch("/api/track_map");
+    const data = await res.json();
+    if (!data.error) trackData = data;
+  }
+
+  async function fetchPositions() {
+    const res = await fetch("/api/live_positions");
+    const data = await res.json();
+    if (!data.error) positions = data;
+  }
+
+  async function refresh() {
+    await fetchPositions();
+    drawTrack();
+  }
+
+  // Inicialização
+    fetchTrackData().then(() => {
+        refresh();
+        setInterval(refresh, 5000);
+    });
+});

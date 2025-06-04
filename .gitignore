@@ -1,4 +1,5 @@
 cache/
+laptopvenv/
 __pycache__/
 venv/
 f1-cloud-lvtl-firebase-adminsdk-fbsvc-978b212e8f.json

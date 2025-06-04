@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="pt">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>F1 LVTL</title>
+  <link rel="stylesheet" href="/static/css/telemetry.css" />
+  <!-- Plotly -->
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="/static/js/analysis.js" defer></script>
+</head>
+
+<body>
+  <div class="container">
+    <div class="sidebar">
+      <h2>F1 LVTL</h2>
+      <a href="/index">🏁 Index</a>
+      <a href="/analysis">📊 Analysis</a>
+      <a href="/replay">⏪ Replay</a>
+    </div>
+
+    <div class="header">
+      <div id="sessionInfo">Seleciona um GP para iniciar análise...</div>
+      <div id="session-details" style="text-align: right;">Detalhes do GP aparecerão aqui.</div>
+    </div>
+
+    <main style="padding: 20px;">
+      <h1>F1 Dashboard</h1>
+
+      <div class="controls">
+        <label for="yearSelect">Ano:</label>
+        <select id="yearSelect">
+          <option>2024</option>
+          <option>2023</option>
+          <option>2022</option>
+        </select>
+
+        <label for="roundSelect">Round:</label>
+        <select id="roundSelect"></select>
+
+        <label for="sessionSelect">Sessão:</label>
+        <select id="sessionSelect">
+          <option value="FP1">FP1</option>
+          <option value="FP2">FP2</option>
+          <option value="FP3">FP3</option>
+          <option value="Q">Qualifying</option>
+          <option value="R">Race</option>
+        </select>
+
+        <button id="loadSessionBtn">Carregar Info Sessão</button>
+      </div>
+
+      <div class="info">
+        <div><strong>Informações da Pista:</strong> <span id="trackDetails">Nenhuma pista carregada.</span></div>
+        <div><strong>Informações da Sessão:</strong> <span id="sessionDetails">Nenhuma sessão carregada.</span></div>
+      </div>
+
+      <div class="drivers-section">
+        <h3>Pilotos:</h3>
+        <table id="driversTable">
+          <thead>
+            <tr>
+              <th>Número</th>
+              <th>Nome</th>
+              <th>Equipe</th>
+              <th>Posição</th>
+              <th>Status</th>
+              <th>Tempo</th>
+            </tr>
+          </thead>
+          <tbody id="driversTableBody"></tbody>
+        </table>
+      </div>
+
+      <div class="telemetry-controls">
+        <label for="driverSelect">Escolha um piloto para telemetria:</label>
+        <select id="driverSelect">
+          <option value="">-- Nenhum --</option>
+        </select>
+        <button id="loadTelemetryBtn">Carregar Telemetria</button>
+      </div>
+
+      <div class="lap-controls">
+        <label for="lapSelect">Selecionar volta:</label>
+        <select id="lapSelect">
+          <option value="">-- Escolha uma volta --</option>
+        </select>
+        <button id="showLapBtn">Mostrar Volta</button>
+      </div>
+
+      <div style="margin-top: 40px;">
+        <h3>Gráficos de Telemetria</h3>
+        <div id="speedChart"></div>
+        <div id="throttleBrakeChart"></div>
+        <div id="rpmGearChart"></div>
+        <div id="drsChart"></div>
+      </div>
+
+      <div id="dashboard" style="margin-top: 20px;">
+        <h3>Resumo da Volta</h3>
+        <p id="lapSummary">Nenhuma volta selecionada.</p>
+      </div>
+
+      <div id="playbackControls" style="margin-top: 20px;">
+        <h3>Playback da Volta</h3>
+        <button id="playBtn">▶️ Play</button>
+        <button id="pauseBtn" disabled>⏸ Pause</button>
+        <input type="range" id="playbackProgress" min="0" max="100" value="0" />
+      </div>
+    </main>
+  </div>
+</body>
+
+</html>
