@@ -1,33 +1,39 @@
 from flask import Flask, request, jsonify, render_template, send_file
 from flask import session as flask_session
-import json
-from urllib.request import urlopen
+import fastf1
+from fastf1.events import get_event_schedule
+from fastf1.core import Session
+from fastf1 import get_session
 import firebase_admin
 from firebase_admin import credentials, db
-from datetime import datetime, timedelta
+import datetime
 from gcs_client import GCSClient
-from fastf1.events import get_event_schedule
+from urllib.request import urlopen
 import plotly.graph_objects as go
-from fastf1.core import Session
-import fastf1
-from fastf1 import get_session
-import requests
-import pytz
-import tempfile
 import pandas as pd
 import threading
+import requests
+import json
+import pytz
 import time
 import os
 
+app = Flask(__name__)
+
+""" Variables """
 bucketName = "f1-cloud-lvtl-cache"
 gcs = GCSClient()
 
-app = Flask(__name__)
+""" Session Variables"""
+active_live_users = 0
+telemetry_threads_started = False
+telemetry_thread_lock = threading.Lock()
+live_telemetry_running = False
 
-if not os.path.exists("./cache"):
-    os.makedirs("./cache")
+if not os.path.exists("tmp/cache"):
+    os.makedirs("/tmp/cache")
 
-fastf1.Cache.enable_cache("./cache")
+fastf1.Cache.enable_cache("/tmp/cache")
 
 cred = credentials.Certificate("f1-cloud-lvtl-firebase-adminsdk-fbsvc-978b212e8f.json")
 firebase_admin.initialize_app(
@@ -37,12 +43,19 @@ firebase_admin.initialize_app(
     },
 )
 
-"""""" """""" """""" """""" """""" """"""
-active_live_users = 0
-telemetry_threads_started = False  # <--- Adicionado aqui
-telemetry_thread_lock = threading.Lock()
+# --- session key e conversão de rondas ---
+def get_latest_session_info():
+    try:
+        res = requests.get("https://api.openf1.org/v1/sessions?session_name=Race")
+        res.raise_for_status()
+        sessions = res.json()
+        latest = sorted(sessions, key=lambda s: s.get("date_start", ""), reverse=True)
+        return latest[0] if latest else None
+    except Exception as e:
+        print(f"[ERROR] session_info: {e}")
+        return None
 
-# ---
+
 def map_fastf1_round_to_meeting_key(year: int, round_number: int):
     try:
         meetings_url = f"https://api.openf1.org/v1/meetings?year={year}"
@@ -78,27 +91,13 @@ def map_fastf1_round_to_meeting_key(year: int, round_number: int):
         print(f"[ERROR] Erro ao mapear round para meeting_key: {e}")
         return None
 
-
-# --- session key ---
-def get_latest_session_info():
-    try:
-        res = requests.get("https://api.openf1.org/v1/sessions?session_name=Race")
-        res.raise_for_status()
-        sessions = res.json()
-        latest = sorted(sessions, key=lambda s: s.get("date_start", ""), reverse=True)
-        return latest[0] if latest else None
-    except Exception as e:
-        print(f"[ERROR] session_info: {e}")
-        return None
-
-
 # --- THREAD DE TELEMETRIA ---
-
+# -- com start/stop e fetch --
 def fetch_and_push_live_telemetry():
     def loop():
         while live_telemetry_running:
             try:
-                res = requests.get("http://127.0.0.1:5000/api/live_dashboard")
+                res = requests.get("https://f1-cloud-lvtl.nw.r.appspot.com/api/live_dashboard")
                 if res.status_code == 200:
                     dashboard = res.json()
                     db.reference("/live_telemetry").set(dashboard)
@@ -110,18 +109,20 @@ def fetch_and_push_live_telemetry():
     live_thread = threading.Thread(target=loop, daemon=True)
     live_thread.start()
 
+
 def start_live_telemetry_threads():
     global live_telemetry_running
     live_telemetry_running = True
     fetch_and_push_live_telemetry()
     # Repita para outras threads (radios, summary, etc.)
 
+
 def stop_live_telemetry_threads():
     global live_telemetry_running
     live_telemetry_running = False
     print("[INFO] Threads de live_telemetry paradas.")
 
-# --- THREAD DE RESUMO DA CORRIDA ---
+
 def fetch_and_push_race_summary():
     def loop():
         while True:
@@ -147,7 +148,6 @@ def fetch_and_push_race_summary():
     threading.Thread(target=loop, daemon=True).start()
 
 
-# --- THREAD DE RÁDIOS ---
 def fetch_and_push_team_radio():
     def loop():
         while True:
@@ -178,7 +178,6 @@ def fetch_and_push_team_radio():
     threading.Thread(target=loop, daemon=True).start()
 
 
-# --- THREAD DE PENALIDADES ---
 def fetch_and_push_penalties():
     try:
         # Obter a sessão mais recente
@@ -236,7 +235,6 @@ def fetch_and_push_penalties():
         print(f"[PENALTIES] Erro ao buscar penalidades: {e}")
 
 
-# --- THREAD DE SESSION INFO ---
 def fetch_and_push_session_info():
     try:
         # 1. Buscar todas as sessões já iniciadas, ordenadas por data
@@ -278,7 +276,6 @@ def fetch_and_push_session_info():
         print("Erro em fetch_and_push_session_info:", e)
 
 
-# --- THREAD DE SESSION DETAILS ---
 def fetch_and_push_session_details():
     try:
         res = requests.get("https://api.openf1.org/v1/sessions")
@@ -329,15 +326,7 @@ def fetch_and_push_session_details():
     except Exception as e:
         print("Erro em fetch_and_push_session_details:", e)
 
-
-@app.route("/")
-def index():
-    return render_template("index.html")
-
-
-active_live_users = 0
-telemetry_thread_lock = threading.Lock()
-
+# --- Routes para os active live users ---
 @app.route("/enter_live")
 def enter_live():
     global active_live_users, telemetry_threads_started
@@ -349,6 +338,7 @@ def enter_live():
             telemetry_threads_started = True
     return jsonify({"status": "entered"})
 
+
 @app.route("/exit_live")
 def exit_live():
     global active_live_users, telemetry_threads_started
@@ -359,6 +349,13 @@ def exit_live():
             telemetry_threads_started = False
             stop_live_telemetry_threads()
     return jsonify({"status": "exited"})
+
+# ------------------------------
+# --- Routes funcionais ---
+
+@app.route("/")
+def index():
+    return render_template("index.html")
 
 
 @app.route("/live_telemetry")
@@ -385,6 +382,7 @@ def replay():
     return render_template("replay.html")
 
 
+# -- Routes Live_telemetry / Dashboard_extras.js --
 @app.route("/api/session_info")
 def session_info():
     year = int(request.args.get("year", 2024))
@@ -431,11 +429,11 @@ def session_info():
         print(f"Erro ao carregar info da sessão: {e}")
         return jsonify({"error": str(e)}), 500
 
-
+# - falta meter o track_map funcional com a lógica do bambónio
 @app.route("/api/track_map")
 def track_map():
     try:
-        now = datetime.datetime.now(pytz.utc)
+        now = datetime.now(pytz.utc)
         schedule = fastf1.get_event_schedule(now.year, include_testing=False)
         schedule = schedule.dropna(axis=1, how="all")
 
@@ -484,6 +482,69 @@ def track_map():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/live_positions")
+def live_positions():
+    import numpy as np
+
+    try:
+        now = datetime.datetime.now(pytz.utc)
+        schedule = fastf1.get_event_schedule(now.year, include_testing=False)
+
+        # Obter última sessão válida
+        schedule = schedule.dropna(
+            subset=[f"Session{i}DateUtc" for i in range(1, 6)], how="all"
+        )
+        past_sessions = []
+        for i in range(1, 6):
+            date_col = f"Session{i}DateUtc"
+            name_col = f"Session{i}"
+            if date_col in schedule.columns and name_col in schedule.columns:
+                schedule[date_col] = pd.to_datetime(schedule[date_col], utc=True)
+                recent = schedule[schedule[date_col] <= now]
+                if not recent.empty:
+                    last = recent.iloc[-1]
+                    past_sessions.append((int(last["RoundNumber"]), last[name_col]))
+
+        if not past_sessions:
+            return jsonify([])
+
+        rnd, session_name = past_sessions[-1]
+        session = fastf1.get_session(now.year, rnd, session_name)
+        session.load(telemetry=False, laps=True, weather=False, messages=False)
+
+        if not hasattr(session, "position_data") or session.position_data is None:
+            print("[DEBUG] Dados de posição não disponíveis para esta sessão.")
+            return jsonify([])
+
+        pos_data = session.position_data
+        if pos_data.empty:
+            return jsonify([])
+
+        latest_time = pos_data.index.get_level_values(1).max()
+        latest_positions = pos_data.xs(latest_time, level=1)
+
+        # Normalize positions for rendering
+        x_vals = latest_positions["X"].astype(float)
+        y_vals = latest_positions["Y"].astype(float)
+        min_x, max_x = x_vals.min(), x_vals.max()
+        min_y, max_y = y_vals.min(), y_vals.max()
+
+        norm_x = ((x_vals - min_x) / (max_x - min_x)) * 100
+        norm_y = ((y_vals - min_y) / (max_y - min_y)) * 100
+
+        drivers = latest_positions.index
+        data = [
+            {"driver_number": driver, "x": float(x), "y": float(y)}
+            for driver, x, y in zip(drivers, norm_x, norm_y)
+        ]
+
+        return jsonify(data)
+
+    except Exception as e:
+        print(f"[ERROR] FastF1 /api/live_positions: {e}")
+        return jsonify([])
 
 
 @app.route("/api/race_summary")
@@ -548,9 +609,9 @@ def penalties():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-""" Analysis Routes """
-
+# -----------------------
+# --- Analysis Routes ---
+# -----------------------
 
 @app.route("/api/gcs/list_rounds")
 def list_rounds():
@@ -590,9 +651,21 @@ def upload_session_info():
                     "DriverNumber": drv,
                     "FullName": driver.get("FullName", "N/A"),
                     "TeamName": driver.get("TeamName", "N/A"),
-                    "Position": int(results["Position"]) if "Position" in results and pd.notnull(results["Position"]) else "N/A",
-                    "Status": results["Status"] if "Status" in results and pd.notnull(results["Status"]) else "N/A",
-                    "Time": str(results["Time"]) if "Time" in results and pd.notnull(results["Time"]) else "N/A",
+                    "Position": (
+                        int(results["Position"])
+                        if "Position" in results and pd.notnull(results["Position"])
+                        else "N/A"
+                    ),
+                    "Status": (
+                        results["Status"]
+                        if "Status" in results and pd.notnull(results["Status"])
+                        else "N/A"
+                    ),
+                    "Time": (
+                        str(results["Time"])
+                        if "Time" in results and pd.notnull(results["Time"])
+                        else "N/A"
+                    ),
                 }
             )
 
@@ -824,7 +897,9 @@ def lap_consistency():
     driver = request.args.get("driver")
 
     try:
-        print(f"[DEBUG] Lap Consistency: year={year}, round={rnd}, session={session}, driver={driver}")
+        print(
+            f"[DEBUG] Lap Consistency: year={year}, round={rnd}, session={session}, driver={driver}"
+        )
 
         # Mapear nomes de sessões
         session_name_mapping = {
@@ -834,15 +909,21 @@ def lap_consistency():
             "Q": "Qualifying",
             "SQ": "Sprint Qualifying",
             "SPR": "Sprint",
-            "R": "Race"
+            "R": "Race",
         }
 
         # Buscar meetings e filtrar testes
         meeting_url = f"https://api.openf1.org/v1/meetings?year={year}"
         meetings = requests.get(meeting_url).json()
-        meetings_validos = [m for m in meetings if not m["meeting_name"].lower().startswith("pre-season")]
+        meetings_validos = [
+            m
+            for m in meetings
+            if not m["meeting_name"].lower().startswith("pre-season")
+        ]
         meetings_sorted = sorted(meetings_validos, key=lambda m: m["date_start"])
-        print(f"[DEBUG] Total de meetings válidos (excluindo testes) para {year}: {len(meetings_sorted)}")
+        print(
+            f"[DEBUG] Total de meetings válidos (excluindo testes) para {year}: {len(meetings_sorted)}"
+        )
         for i, m in enumerate(meetings_sorted):
             print(f"[DEBUG] Round {i+1}: {m['meeting_name']} ({m['meeting_key']})")
 
@@ -871,10 +952,12 @@ def lap_consistency():
         consistency_data = []
         for lap in laps_data:
             if lap.get("lap_duration"):
-                consistency_data.append({
-                    "lap": lap["lap_number"],
-                    "lap_time": round(float(lap["lap_duration"]), 3)
-                })
+                consistency_data.append(
+                    {
+                        "lap": lap["lap_number"],
+                        "lap_time": round(float(lap["lap_duration"]), 3),
+                    }
+                )
 
         return jsonify(consistency_data)
     except Exception as e:
@@ -890,7 +973,9 @@ def tyre_stints():
     driver = request.args.get("driver")
 
     try:
-        print(f"[DEBUG] Tyre Stints: year={year}, round={rnd}, session={session}, driver={driver}")
+        print(
+            f"[DEBUG] Tyre Stints: year={year}, round={rnd}, session={session}, driver={driver}"
+        )
 
         # Mapear nomes de sessões
         session_name_mapping = {
@@ -900,15 +985,21 @@ def tyre_stints():
             "Q": "Qualifying",
             "SQ": "Sprint Qualifying",
             "SPR": "Sprint",
-            "R": "Race"
+            "R": "Race",
         }
 
         # Buscar meetings e filtrar testes
         meeting_url = f"https://api.openf1.org/v1/meetings?year={year}"
         meetings = requests.get(meeting_url).json()
-        meetings_validos = [m for m in meetings if not m["meeting_name"].lower().startswith("pre-season")]
+        meetings_validos = [
+            m
+            for m in meetings
+            if not m["meeting_name"].lower().startswith("pre-season")
+        ]
         meetings_sorted = sorted(meetings_validos, key=lambda m: m["date_start"])
-        print(f"[DEBUG] Total de meetings válidos (excluindo testes) para {year}: {len(meetings_sorted)}")
+        print(
+            f"[DEBUG] Total de meetings válidos (excluindo testes) para {year}: {len(meetings_sorted)}"
+        )
         for i, m in enumerate(meetings_sorted):
             print(f"[DEBUG] Round {i+1}: {m['meeting_name']} ({m['meeting_key']})")
 
@@ -935,12 +1026,14 @@ def tyre_stints():
 
         formatted = []
         for s in stints_data:
-            formatted.append({
-                "compound": s.get("compound", "UNKNOWN"),
-                "startLap": s.get("lap_start"),
-                "endLap": s.get("lap_end"),
-                "tyreLife": s.get("tyre_age_at_start", 0)
-            })
+            formatted.append(
+                {
+                    "compound": s.get("compound", "UNKNOWN"),
+                    "startLap": s.get("lap_start"),
+                    "endLap": s.get("lap_end"),
+                    "tyreLife": s.get("tyre_age_at_start", 0),
+                }
+            )
 
         return jsonify({"stints": formatted})
     except Exception as e:
@@ -950,71 +1043,7 @@ def tyre_stints():
 
 """ ROUTES NOT IN USE """
 
-""" route not in use """
-
-
-@app.route("/api/live_positions")
-def live_positions():
-    import numpy as np
-
-    try:
-        now = datetime.datetime.now(pytz.utc)
-        schedule = fastf1.get_event_schedule(now.year, include_testing=False)
-
-        # Obter última sessão válida
-        schedule = schedule.dropna(
-            subset=[f"Session{i}DateUtc" for i in range(1, 6)], how="all"
-        )
-        past_sessions = []
-        for i in range(1, 6):
-            date_col = f"Session{i}DateUtc"
-            name_col = f"Session{i}"
-            if date_col in schedule.columns and name_col in schedule.columns:
-                schedule[date_col] = pd.to_datetime(schedule[date_col], utc=True)
-                recent = schedule[schedule[date_col] <= now]
-                if not recent.empty:
-                    last = recent.iloc[-1]
-                    past_sessions.append((int(last["RoundNumber"]), last[name_col]))
-
-        if not past_sessions:
-            return jsonify([])
-
-        rnd, session_name = past_sessions[-1]
-        session = fastf1.get_session(now.year, rnd, session_name)
-        session.load(telemetry=False, laps=False, weather=False, messages=False)
-
-        pos_data = session.position_data
-        if pos_data.empty:
-            return jsonify([])
-
-        latest_time = pos_data.index.get_level_values(1).max()
-        latest_positions = pos_data.xs(latest_time, level=1)
-
-        # Normalize positions for rendering
-        x_vals = latest_positions["X"].astype(float)
-        y_vals = latest_positions["Y"].astype(float)
-        min_x, max_x = x_vals.min(), x_vals.max()
-        min_y, max_y = y_vals.min(), y_vals.max()
-
-        norm_x = ((x_vals - min_x) / (max_x - min_x)) * 100
-        norm_y = ((y_vals - min_y) / (max_y - min_y)) * 100
-
-        drivers = latest_positions.index
-        data = [
-            {"driver_number": driver, "x": float(x), "y": float(y)}
-            for driver, x, y in zip(drivers, norm_x, norm_y)
-        ]
-
-        return jsonify(data)
-
-    except Exception as e:
-        print(f"[ERROR] FastF1 /api/live_positions: {e}")
-        return jsonify([])
-
-
-""" route not in use """
-
-
+'''
 @app.route("/api/replay_telemetry")
 def replay_telemetry():
     session_key = request.args.get("session_key")
@@ -1036,9 +1065,6 @@ def replay_telemetry():
         return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
-""" route not in use """
 
 
 @app.route("/api/compare")
@@ -1068,9 +1094,6 @@ def api_compare():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
-""" route not in use """
 
 
 @app.route("/api/drivers")
@@ -1108,9 +1131,6 @@ def drivers():
     except Exception as e:
         print(f"Erro ao buscar dados: {e}")
         return jsonify({"error": f"Erro ao buscar dados: {str(e)}"}), 500
-
-
-""" route not in use """
 
 
 @app.route("/api/telemetry")
@@ -1174,9 +1194,6 @@ def telemetry():
         return jsonify({"error": "Erro ao buscar telemetria: " + str(e)})
 
 
-""" route not in use """
-
-
 @app.route("/api/track")
 def track():
     year = int(request.args.get("year", 2024))
@@ -1200,8 +1217,6 @@ def track():
         print(f"Erro ao buscar circuito: {e}")
         return jsonify({"error": f"Erro ao buscar circuito: {str(e)}"}), 500
 
-
-""" route not in use """
 
 
 @app.route("/api/live_dashboard")
@@ -1309,8 +1324,6 @@ def live_dashboard():
         return jsonify({"error": str(e)}), 500
 
 
-""" route not in use """
-
 
 @app.route("/api/current_session")
 def current_session():
@@ -1355,7 +1368,7 @@ def current_session():
 
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
+'''
 
 if __name__ == "__main__":
     app.run(debug=True, use_reloader=False)

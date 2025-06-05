@@ -15,8 +15,10 @@
 
 # Python pycache:
 __pycache__/
+.vscode/
 .venv/
 venv/
+laptopvenv/
 cache/
 .env
 # Ignored by the build system

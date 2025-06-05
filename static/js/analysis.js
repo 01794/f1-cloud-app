@@ -390,7 +390,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     })
   };
 
-
   async function loadLapConsistencyChart(year, round, session, driver) {
     try {
       const response = await fetch(`/api/gcs/lap_consistency?year=${year}&round=${round}&session=${session}&driver=${driver}`);
@@ -471,7 +470,4 @@ document.addEventListener("DOMContentLoaded", async () => {
       console.error("Erro ao carregar gráfico de stints:", err);
     }
   }
-
-
-
 });

@@ -1,10 +1,7 @@
-// dashboard_extras.js completo com proteção de refresh durante interações (rádios e inputs)
-
 const database = firebase.database();
-
 let driverMap = {};
 
-// --- MAPEIA NOMES DOS PILOTOS ---
+// --- PILOT INFO ---
 function updateDriverMap() {
   return database.ref("/live_telemetry").once("value").then(snapshot => {
     const data = snapshot.val() || [];
@@ -66,7 +63,7 @@ function fetchSessionDetails() {
   });
 }
 
-// --- PENALIDADES ---
+// --- PENALTIES ---
 function fetchPenalties() {
   database.ref("/penalties").once("value").then(snapshot => {
     const data = snapshot.val();
@@ -98,7 +95,7 @@ function fetchPenalties() {
   });
 }
 
-// --- RESUMO DA CORRIDA ---
+// --- SESSION SUMMARY ---
 function fetchRaceSummary() {
   database.ref("/race_summary").once("value").then(snapshot => {
     const data = snapshot.val();
@@ -126,7 +123,7 @@ function fetchRaceSummary() {
   });
 }
 
-// --- RÁDIOS ---
+// --- RADIOS ---
 function fetchTeamRadio() {
   const isPlaying = Array.from(document.querySelectorAll("#radio-list audio")).some(a => !a.paused);
   if (isPlaying) {
@@ -186,5 +183,5 @@ function refreshAll() {
   });
 }
 
-setInterval(refreshAll, 15000);
+setInterval(refreshAll, 15000); // Diminuir tempo para 5 segundos para uma boa ui
 document.addEventListener("DOMContentLoaded", refreshAll);
