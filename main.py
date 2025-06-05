@@ -4,6 +4,10 @@ from urllib.request import urlopen
 import firebase_admin
 from firebase_admin import credentials, db
 from datetime import datetime, timedelta
+from datetime import timedelta
+from fastf1.core import Session
+
+import numpy as np
 import fastf1
 import requests
 import pytz
@@ -450,154 +454,197 @@ def penalties():
     
     # NOVA SHIT
 
+
+
+
 @app.route("/api/replay_data")
 def replay_data():
-    from datetime import timedelta
-    from math import hypot
-    from collections import defaultdict
-    import numpy as np
-
-    year = int(request.args.get("year", 2024))
-    round_ = int(request.args.get("round", 1))
-    session_name = request.args.get("session", "R")
-
     try:
+        year = int(request.args.get("year", 2024))
+        round_ = int(request.args.get("round", 1))
+        session_name = request.args.get("session", "R")
+
         session = fastf1.get_session(year, round_, session_name)
-        session.load(telemetry=True, laps=False, weather=False, messages=False)
+        session.load(telemetry=True, laps=True, weather=False, messages=False)
+        session_start = session.session_start_time
 
-        driver_map = {str(drv): session.get_driver(drv)['FullName'] for drv in session.drivers}
-        pos_dict = session.pos_data
+        # Mapeia número para nome do piloto
+        number_to_name = {}
+        for drv in session.drivers:
+            try:
+                info = session.get_driver(drv)
+                # Usar o número da sessão como chave, não o permanente
+                name = info['FullName']
+                number_to_name[int(drv)] = name  # drv é string, converter para int
+                print(f"[DEBUG] Mapeado: Driver {drv} -> {name}")
+            except Exception as e:
+                print(f"[WARNING] Erro ao obter piloto {drv}: {str(e)}")
+                continue
+            print(f"[DEBUG] Mapeamento final: {number_to_name}")
 
-        dfs = []
-        for drv, df in pos_dict.items():
+
+        # Valida pos_data
+        if not session.pos_data or all(df is None or df.empty for df in session.pos_data.values()):
+            return jsonify({"error": "pos_data não disponível"}), 400
+
+        # Junta todos os DataFrames de posição
+        pos_dfs = []
+        for drv, df in session.pos_data.items():
             if df is not None and not df.empty:
                 df = df.copy()
-                df["Driver"] = drv
-                dfs.append(df)
+                df["Driver"] = int(drv)
+                pos_dfs.append(df)
+        pos_data = pd.concat(pos_dfs).reset_index()
+        
+        # CORREÇÃO: Converter para segundos desde o início
+        min_date = pos_data["Date"].min()
+        pos_data["TimeDelta"] = (pos_data["Date"] - min_date)
+        pos_data["Seconds"] = pos_data["TimeDelta"].dt.total_seconds()
+        pos_data["AbsTime"] = session_start + pd.to_timedelta(pos_data["Seconds"], unit='s')
+        
+        pos_data = pos_data[["Driver", "AbsTime", "Seconds", "X", "Y"]].dropna()
 
-        if not dfs:
-            return jsonify([])
+        # Criar dicionário de voltas por segundo
+        lap_map = {}
+        for _, lap in session.laps.iterrows():
+            if pd.isna(lap["LapStartTime"]) or pd.isna(lap["LapTime"]):
+                continue
 
-        pos_data = pd.concat(dfs)
-        pos_data.set_index(["Driver", "Date"], inplace=True)
+            driver = int(lap["DriverNumber"])
+            lap_start_sec = lap["LapStartTime"].total_seconds()
+            lap_end_sec = lap_start_sec + lap["LapTime"].total_seconds()
+            lap_number = int(lap["LapNumber"])
+            position = int(lap["Position"]) if not pd.isna(lap["Position"]) else None
 
-        # Ignorar os primeiros 4 minutos
-        min_time = pos_data.index.get_level_values(1).min() + timedelta(minutes=5)
-        filtered = pos_data[pos_data.index.get_level_values(1) >= min_time]
+            # Mapear cada segundo da volta
+            for sec in range(int(lap_start_sec), int(lap_end_sec) + 1):
+                lap_map[(driver, sec)] = (lap_number, position)
 
-        # Estimar a linha de partida: posição mais frequente após 4 min
-        positions = filtered.reset_index()[["X", "Y"]].dropna()
-        positions["x_rounded"] = positions["X"].round(-1)
-        positions["y_rounded"] = positions["Y"].round(-1)
-        start_group = positions.groupby(["x_rounded", "y_rounded"]).size().idxmax()
-        start_line = (start_group[0], start_group[1])
-        print(f"[DEBUG] Linha de partida estimada: {start_line}")
-
-        def dist(a, b):
-            return hypot(a[0] - b[0], a[1] - b[1])
-
-        # Distância acumulada por piloto
-        distances = defaultdict(float)
-        last_positions = {}
-
-        interval = timedelta(seconds=5)
-        times = sorted(set(filtered.index.get_level_values(1)))
-        sampled_times = []
-        current = times[0]
-        for t in times:
-            if t >= current:
-                sampled_times.append(t)
-                current += interval
+        # Amostragem a cada 5 segundos
+        min_sec = pos_data["Seconds"].min()
+        max_sec = pos_data["Seconds"].max()
+        sampled_seconds = np.arange(min_sec, max_sec, 5)
 
         frames = []
-        for t in sampled_times:
-            snapshot = filtered.xs(t, level=1, drop_level=False)
+        for sec in sampled_seconds:
+            # Encontrar dados mais próximos deste segundo
+            time_tolerance = 0.5  # 0.5 segundos
+            snapshot = pos_data[
+                (pos_data["Seconds"] >= sec - time_tolerance) & 
+                (pos_data["Seconds"] <= sec + time_tolerance)
+            ]
+            
             frame = []
-            for idx, row in snapshot.iterrows():
-                driver = idx[0]  # Apenas o número do piloto (str)
-
-                x, y = row["X"], row["Y"]
-                if pd.isna(x) or pd.isna(y):
+            drivers_in_frame = set()
+            
+            for _, row in snapshot.iterrows():
+                driver = row["Driver"]
+                if driver in drivers_in_frame:
                     continue
-
-                if driver not in last_positions:
-                    last_positions[driver] = (x, y)
-                    distances[driver] = dist((x, y), start_line)
-                else:
-                    last_pos = last_positions[driver]
-                    delta = dist((x, y), last_pos)
-                    distances[driver] += delta
-                    last_positions[driver] = (x, y)
-
+                drivers_in_frame.add(driver)
+                
+                # Obter dados da volta (arredondar para segundo inteiro)
+                lap_data = lap_map.get((driver, int(round(sec))), (0, None))
+                
                 frame.append({
-                    "driver_number": str(driver),
-                    "driver_name": driver_map.get(str(driver), f"Piloto {driver}"),
-                    "x": float(x),
-                    "y": float(y),
-                    "distance": distances[driver]
+                    "driver_number": driver,
+                    "driver_name": number_to_name.get(driver, f"Carro {driver}"),
+                    "x": float(row["X"]),
+                    "y": float(row["Y"]),
+                    "laps": lap_data[0],
+                    "position": lap_data[1] or 99  # fallback
                 })
-
-            # Ordenar por distância percorrida (maior distância = 1º lugar)
-            frame.sort(key=lambda d: -d["distance"])
-            for i, d in enumerate(frame):
-                d["position"] = i + 1
+            
+            # Ordenar por posição e recalcular
+            frame.sort(key=lambda c: c["position"])
+            for i, car in enumerate(frame):
+                car["position"] = i + 1
 
             frames.append({
-                "time": str(t),
+                "time_sec": sec,
                 "positions": frame
             })
 
-        print(f"[DEBUG] Total frames gerados: {len(frames)}")
-        return jsonify(frames)
+        # Construir lap_index_map
+        # Construir lap_index_map
+        lap_index_map = {}
+        for _, lap in session.laps.iterrows():
+            if pd.isna(lap["LapStartTime"]):
+                continue
+                
+            lap_number = str(int(lap["LapNumber"]))
+            driver_number = int(lap["DriverNumber"])
+            start_sec = lap["LapStartTime"].total_seconds()
+            
+            # Encontrar frame mais próximo para este piloto específico
+            closest_index = 0
+            min_diff = float('inf')
+            
+            # Procurar apenas nos frames onde este piloto aparece
+            for i, frame in enumerate(frames):
+                # Verificar se o piloto está neste frame
+                driver_in_frame = any(car['driver_number'] == driver_number for car in frame['positions'])
+                
+                if driver_in_frame:
+                    diff = abs(frame['time_sec'] - start_sec)
+                    if diff < min_diff:
+                        min_diff = diff
+                        closest_index = i
+            
+            # Se encontrou um frame bom, registrar
+            if min_diff < 10:  # Aceitar até 10 segundos de diferença
+                lap_index_map[f"{driver_number}-{lap_number}"] = closest_index
+                print(f"[DEBUG] Volta {lap_number} do piloto {driver_number} mapeada para frame {closest_index} (diferença: {min_diff:.1f}s)")
+            else:
+                print(f"[WARNING] Não encontrou frame adequado para volta {lap_number} do piloto {driver_number}")
+
+        # Agrupar por número de volta (ignorando piloto)
+        grouped_lap_map = {}
+        for key, frame_idx in lap_index_map.items():
+            lap_num = key.split('-')[1]
+            if lap_num not in grouped_lap_map or frame_idx < grouped_lap_map[lap_num]:
+                grouped_lap_map[lap_num] = frame_idx
+
+        print(f"[DEBUG] Mapeamento final de voltas: {grouped_lap_map}")
+        return jsonify({
+            "frames": frames,
+            "lap_index_map": grouped_lap_map
+        })
 
     except Exception as e:
         print(f"[REPLAY ERROR] {e}")
         return jsonify({"error": str(e)}), 500
 
 
-
-    
-
 @app.route("/api/track_layout")
 def track_layout():
-    from datetime import timedelta
-
-    year = int(request.args.get("year", 2024))
-    round_ = int(request.args.get("round", 1))
-    session_name = request.args.get("session", "R")
-
     try:
+        year = int(request.args.get("year", 2024))
+        round_ = int(request.args.get("round", 1))
+        session_name = request.args.get("session", "R")
+
         session = fastf1.get_session(year, round_, session_name)
         session.load(telemetry=True, laps=False, weather=False, messages=False)
 
-        pos_dict = session.pos_data
-
-        if not pos_dict:
-            print("[DEBUG] pos_data está vazio (dict)")
+        if not session.pos_data:
+            print("[DEBUG] pos_data está vazio")
             return jsonify([])
 
-        # Combina os DataFrames dos pilotos
         dfs = []
-        for drv, df in pos_dict.items():
+        for drv, df in session.pos_data.items():
             if df is not None and not df.empty:
                 df = df.copy()
                 df["Driver"] = drv
                 dfs.append(df)
 
         if not dfs:
-            print("[DEBUG] Nenhum DataFrame válido em pos_data")
+            print("[DEBUG] Nenhum DataFrame de posição válido")
             return jsonify([])
 
         pos_data = pd.concat(dfs)
-        pos_data.set_index(["Driver", "Date"], inplace=True)
+        base_driver = pos_data["Driver"].value_counts().idxmax()
 
-        # Seleciona o piloto com mais dados como base do traçado
-        traj_por_driver = pos_data.groupby("Driver").size()
-        base_driver = traj_por_driver.idxmax()
-
-        traj = pos_data.xs(base_driver, level="Driver")
-        traj = traj.dropna(subset=["X", "Y"])
-
+        traj = pos_data[pos_data["Driver"] == base_driver].dropna(subset=["X", "Y"])
         path_points = [{"x": float(row.X), "y": float(row.Y)} for _, row in traj.iterrows()]
         print(f"[TRACK DEBUG] Traçado com {len(path_points)} pontos para piloto {base_driver}")
         return jsonify(path_points)
@@ -605,6 +652,39 @@ def track_layout():
     except Exception as e:
         print(f"[TRACK LAYOUT ERROR] {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/lap_times")
+def lap_times():
+    try:
+        year = int(request.args.get("year", 2024))
+        round_ = int(request.args.get("round", 1))
+        session_name = request.args.get("session", "R")
+
+        session = fastf1.get_session(year, round_, session_name)
+        session.load(laps=True)
+
+        session_start = session.session_start_time
+        lap_times = {}
+
+        for _, lap in session.laps.iterrows():
+            if pd.isna(lap["LapStartTime"]) or pd.isna(lap["LapNumber"]):
+                continue
+
+            lap_number = str(int(lap["LapNumber"]))
+            start_time = session_start + pd.to_timedelta(lap["LapStartTime"])
+            seconds = (start_time - session_start).total_seconds()
+            lap_times[lap_number] = round(seconds, 2)
+
+        return jsonify({"laps": lap_times})
+
+    except Exception as e:
+        print(f"[LAP_TIMES ERROR] {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+
+
 
 
 
