@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, send_file
+from flask import session as flask_session
 import json
 from urllib.request import urlopen
 import firebase_admin
@@ -6,16 +7,19 @@ from firebase_admin import credentials, db
 from datetime import datetime, timedelta
 from gcs_client import GCSClient
 from fastf1.events import get_event_schedule
-import fastf1 
+import plotly.graph_objects as go
+from fastf1.core import Session
+import fastf1
 from fastf1 import get_session
 import requests
 import pytz
+import tempfile
 import pandas as pd
 import threading
 import time
 import os
 
-bucketName = 'f1-cloud-lvtl-cache'
+bucketName = "f1-cloud-lvtl-cache"
 gcs = GCSClient()
 
 app = Flask(__name__)
@@ -34,8 +38,46 @@ firebase_admin.initialize_app(
 )
 
 """""" """""" """""" """""" """""" """"""
-telemetry_threads_started = False
-keep_updating_telemetry = False
+active_live_users = 0
+telemetry_threads_started = False  # <--- Adicionado aqui
+telemetry_thread_lock = threading.Lock()
+
+# ---
+def map_fastf1_round_to_meeting_key(year: int, round_number: int):
+    try:
+        meetings_url = f"https://api.openf1.org/v1/meetings?year={year}"
+        meetings = requests.get(meetings_url).json()
+
+        if not meetings:
+            print(f"[DEBUG] Nenhum meeting retornado para o ano {year}.")
+            return None
+
+        # Filtra apenas os meetings que não sejam testes
+        valid_meetings = [m for m in meetings if "Testing" not in m["meeting_name"]]
+
+        # Ordenar por data
+        meetings_sorted = sorted(valid_meetings, key=lambda m: m["date_start"])
+
+        print(
+            f"[DEBUG] Total de meetings válidos (excluindo testes) para {year}: {len(meetings_sorted)}"
+        )
+        for idx, m in enumerate(meetings_sorted, 1):
+            print(f"[DEBUG] Round {idx}: {m['meeting_name']} ({m['meeting_key']})")
+
+        if round_number <= 0 or round_number > len(meetings_sorted):
+            print(f"[DEBUG] Round inválido: {round_number}")
+            return None
+
+        meeting = meetings_sorted[round_number - 1]
+        print(
+            f"[DEBUG] Mapeado round {round_number} → meeting_key={meeting['meeting_key']}"
+        )
+        return meeting["meeting_key"]
+
+    except Exception as e:
+        print(f"[ERROR] Erro ao mapear round para meeting_key: {e}")
+        return None
+
 
 # --- session key ---
 def get_latest_session_info():
@@ -48,11 +90,13 @@ def get_latest_session_info():
     except Exception as e:
         print(f"[ERROR] session_info: {e}")
         return None
-    
+
+
 # --- THREAD DE TELEMETRIA ---
+
 def fetch_and_push_live_telemetry():
     def loop():
-        while True:
+        while live_telemetry_running:
             try:
                 res = requests.get("http://127.0.0.1:5000/api/live_dashboard")
                 if res.status_code == 200:
@@ -62,8 +106,20 @@ def fetch_and_push_live_telemetry():
             except Exception as e:
                 print("Erro ao atualizar live_telemetry:", e)
             time.sleep(5.0)
+    global live_thread
+    live_thread = threading.Thread(target=loop, daemon=True)
+    live_thread.start()
 
-    threading.Thread(target=loop, daemon=True).start()
+def start_live_telemetry_threads():
+    global live_telemetry_running
+    live_telemetry_running = True
+    fetch_and_push_live_telemetry()
+    # Repita para outras threads (radios, summary, etc.)
+
+def stop_live_telemetry_threads():
+    global live_telemetry_running
+    live_telemetry_running = False
+    print("[INFO] Threads de live_telemetry paradas.")
 
 # --- THREAD DE RESUMO DA CORRIDA ---
 def fetch_and_push_race_summary():
@@ -90,12 +146,15 @@ def fetch_and_push_race_summary():
 
     threading.Thread(target=loop, daemon=True).start()
 
+
 # --- THREAD DE RÁDIOS ---
 def fetch_and_push_team_radio():
     def loop():
         while True:
             try:
-                res = requests.get("https://api.openf1.org/v1/team_radio?session_key=latest")
+                res = requests.get(
+                    "https://api.openf1.org/v1/team_radio?session_key=latest"
+                )
                 if res.status_code == 200:
                     radios_data = res.json()
                     radios = [
@@ -103,18 +162,21 @@ def fetch_and_push_team_radio():
                             "driver_number": r.get("driver_number"),
                             "message": r.get("transcript", ""),
                             "date": r.get("date"),
-                            "recording_url": r.get("recording_url")
+                            "recording_url": r.get("recording_url"),
                         }
                         for r in reversed(radios_data)
                         if r.get("recording_url")  # só se tiver áudio
-                    ][:5]  # pega os 5 mais recentes com áudio
+                    ][
+                        :5
+                    ]  # pega os 5 mais recentes com áudio
 
-                    db.reference('/team_radio').set(radios)
+                    db.reference("/team_radio").set(radios)
             except Exception as e:
                 print("Erro ao atualizar team_radio:", e)
             time.sleep(10.0)
 
     threading.Thread(target=loop, daemon=True).start()
+
 
 # --- THREAD DE PENALIDADES ---
 def fetch_and_push_penalties():
@@ -126,10 +188,14 @@ def fetch_and_push_penalties():
         latest = sessions[0]
 
         session_key = latest["session_key"]
-        print(f"[PENALTIES] Usando session_key={session_key} ({latest['session_name']})")
+        print(
+            f"[PENALTIES] Usando session_key={session_key} ({latest['session_name']})"
+        )
 
         # Buscar mensagens de controle de corrida
-        race_control_url = f"https://api.openf1.org/v1/race_control?session_key={session_key}"
+        race_control_url = (
+            f"https://api.openf1.org/v1/race_control?session_key={session_key}"
+        )
         events = requests.get(race_control_url).json()
         print(f"[PENALTIES] Total de eventos recebidos: {len(events)}")
 
@@ -144,20 +210,22 @@ def fetch_and_push_penalties():
             "PENALTY FOR",
             "PIT LANE SPEEDING",
             "DELETED LAP TIME",
-            "YELLOW FLAG INFRINGEMENT"
+            "YELLOW FLAG INFRINGEMENT",
         ]
 
         penalties = []
         for e in events:
             message = e.get("message", "").upper()
             if any(keyword in message for keyword in penalty_keywords):
-                penalties.append({
-                    "driver_number": e.get("driver_number"),
-                    "penalty_type": e.get("category") or "Penalty",
-                    "description": e.get("message"),
-                    "lap_number": e.get("lap_number"),
-                    "date": e.get("date")
-                })
+                penalties.append(
+                    {
+                        "driver_number": e.get("driver_number"),
+                        "penalty_type": e.get("category") or "Penalty",
+                        "description": e.get("message"),
+                        "lap_number": e.get("lap_number"),
+                        "date": e.get("date"),
+                    }
+                )
 
         print(f"[PENALTIES] Penalidades encontradas: {len(penalties)}")
 
@@ -166,6 +234,7 @@ def fetch_and_push_penalties():
 
     except Exception as e:
         print(f"[PENALTIES] Erro ao buscar penalidades: {e}")
+
 
 # --- THREAD DE SESSION INFO ---
 def fetch_and_push_session_info():
@@ -186,15 +255,19 @@ def fetch_and_push_session_info():
         meeting_key = session["meeting_key"]
 
         # 2. Buscar o nome da corrida usando o meeting_key
-        meeting_res = requests.get(f"https://api.openf1.org/v1/meetings?meeting_key={meeting_key}")
+        meeting_res = requests.get(
+            f"https://api.openf1.org/v1/meetings?meeting_key={meeting_key}"
+        )
         meeting_data = meeting_res.json()
         meeting = meeting_data[0] if meeting_data else {}
 
         session_info = {
             "session_name": session.get("session_name", "Sessão"),
             "meeting_name": meeting.get("meeting_name") or "Evento desconhecido",
-            "location": meeting.get("location") or session.get("location", "Desconhecido"),
-            "country": meeting.get("country_name") or session.get("country_name", "Desconhecido"),
+            "location": meeting.get("location")
+            or session.get("location", "Desconhecido"),
+            "country": meeting.get("country_name")
+            or session.get("country_name", "Desconhecido"),
             "start_time": session.get("date_start", "Horário indefinido"),
         }
 
@@ -203,6 +276,7 @@ def fetch_and_push_session_info():
 
     except Exception as e:
         print("Erro em fetch_and_push_session_info:", e)
+
 
 # --- THREAD DE SESSION DETAILS ---
 def fetch_and_push_session_details():
@@ -221,7 +295,9 @@ def fetch_and_push_session_details():
             meeting_key = session["meeting_key"]
             session_key = session["session_key"]
 
-            print(f"[DEBUG] Verificando sessão: {session['session_name']} ({meeting_key}/{session_key})")
+            print(
+                f"[DEBUG] Verificando sessão: {session['session_name']} ({meeting_key}/{session_key})"
+            )
 
             weather_res = requests.get(
                 f"https://api.openf1.org/v1/weather?meeting_key={meeting_key}&session_key={session_key}"
@@ -241,7 +317,7 @@ def fetch_and_push_session_details():
                 "track_temp": last.get("track_temperature"),
                 "wind_speed": last.get("wind_speed"),
                 "current_lap": last.get("session_time", "N/D"),
-                "weather": weather_label
+                "weather": weather_label,
             }
 
             db.reference("/session_details").set(session_details)
@@ -254,10 +330,36 @@ def fetch_and_push_session_details():
         print("Erro em fetch_and_push_session_details:", e)
 
 
-
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+active_live_users = 0
+telemetry_thread_lock = threading.Lock()
+
+@app.route("/enter_live")
+def enter_live():
+    global active_live_users, telemetry_threads_started
+    with telemetry_thread_lock:
+        active_live_users += 1
+        print(f"[INFO] Usuários ativos em live_telemetry: {active_live_users}")
+        if not telemetry_threads_started:
+            start_live_telemetry_threads()
+            telemetry_threads_started = True
+    return jsonify({"status": "entered"})
+
+@app.route("/exit_live")
+def exit_live():
+    global active_live_users, telemetry_threads_started
+    with telemetry_thread_lock:
+        active_live_users = max(active_live_users - 1, 0)
+        print(f"[INFO] Usuários ativos em live_telemetry: {active_live_users}")
+        if active_live_users == 0:
+            telemetry_threads_started = False
+            stop_live_telemetry_threads()
+    return jsonify({"status": "exited"})
+
 
 @app.route("/live_telemetry")
 def live_telemetry():
@@ -271,7 +373,6 @@ def live_telemetry():
         fetch_and_push_session_details()
         telemetry_threads_started = True
     return render_template("live_telemetry.html")
-
 
 
 @app.route("/analysis")
@@ -447,7 +548,9 @@ def penalties():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-''' Analysis Routes '''
+
+""" Analysis Routes """
+
 
 @app.route("/api/gcs/list_rounds")
 def list_rounds():
@@ -477,39 +580,51 @@ def upload_session_info():
         drivers_data = []
         for drv in session.drivers:
             driver = session.get_driver(drv)
-            results = session.results.loc[drv] if session.results is not None and drv in session.results.index else {}
-            drivers_data.append({
-                "DriverNumber": drv,
-                "FullName": driver.get("FullName", "N/A"),
-                "TeamName": driver.get("TeamName", "N/A"),
-                "Position": results.get("Position", "N/A"),
-                "Status": results.get("Status", "N/A"),
-                "Time": str(results.get("Time", "N/A"))
-            })
+            results = (
+                session.results.loc[drv]
+                if session.results is not None and drv in session.results.index
+                else {}
+            )
+            drivers_data.append(
+                {
+                    "DriverNumber": drv,
+                    "FullName": driver.get("FullName", "N/A"),
+                    "TeamName": driver.get("TeamName", "N/A"),
+                    "Position": int(results["Position"]) if "Position" in results and pd.notnull(results["Position"]) else "N/A",
+                    "Status": results["Status"] if "Status" in results and pd.notnull(results["Status"]) else "N/A",
+                    "Time": str(results["Time"]) if "Time" in results and pd.notnull(results["Time"]) else "N/A",
+                }
+            )
 
         # Upload to GCS
         object_name = f"session_info/{year}/{rnd}/{session_name}/session_data.json"
-        gcs.upload_json(bucketName, object_name, {
-            "session_data": {
-                "session_name": session.event['EventName'],
-                "location": session.event['Location'],
-                "country": session.event['Country'],
-                "start_time": str(session.event['Session1Date'])
+        gcs.upload_json(
+            bucketName,
+            object_name,
+            {
+                "session_data": {
+                    "session_name": session.event["EventName"],
+                    "location": session.event["Location"],
+                    "country": session.event["Country"],
+                    "start_time": str(session.event["Session1Date"]),
+                },
+                "drivers": drivers_data,
             },
-            "drivers": drivers_data
-        })
+        )
 
-        return jsonify({
-            "status": "success",
-            "object": object_name,
-            "session_data": {
-                "session_name": session.event['EventName'],
-                "location": session.event['Location'],
-                "country": session.event['Country'],
-                "start_time": str(session.event['Session1Date'])
-            },
-            "drivers": drivers_data
-        })
+        return jsonify(
+            {
+                "status": "success",
+                "object": object_name,
+                "session_data": {
+                    "session_name": session.event["EventName"],
+                    "location": session.event["Location"],
+                    "country": session.event["Country"],
+                    "start_time": str(session.event["Session1Date"]),
+                },
+                "drivers": drivers_data,
+            }
+        )
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -540,15 +655,16 @@ def upload_telemetry():
                 minutes = int(total_seconds // 60)
                 seconds = total_seconds % 60
                 formatted_time = f"{minutes}:{seconds:06.3f}"
-                laps_list.append({
-                    "lap_number": int(lap["LapNumber"]),
-                    "lap_time": formatted_time
-                })
+                laps_list.append(
+                    {"lap_number": int(lap["LapNumber"]), "lap_time": formatted_time}
+                )
 
         # Opcional: salvar em bucket
-        gcs.upload_json("f1-cloud-lvtl-cache",
-                        f"{year}/{rnd}/{session}/telemetry/{driver}.json",
-                        {"laps": laps_list})
+        gcs.upload_json(
+            "f1-cloud-lvtl-cache",
+            f"{year}/{rnd}/{session}/telemetry/{driver}.json",
+            {"laps": laps_list},
+        )
 
         return jsonify({"laps": laps_list})
 
@@ -560,40 +676,283 @@ def upload_telemetry():
 def get_lap_telemetry():
     year = request.args.get("year")
     rnd = request.args.get("round")
-    session = request.args.get("session")
+    session_name = request.args.get("session")
     driver = request.args.get("driver")
-    lap = request.args.get("lap")
+    lap_number = request.args.get("lap")
 
-    if not all([year, rnd, session, driver, lap]):
+    if not all([year, rnd, session_name, driver, lap_number]):
         return jsonify({"error": "Parâmetros em falta"}), 400
 
     try:
-        gp = fastf1.get_session(int(year), int(rnd), session)
-        gp.load()
-        lap_data = gp.laps.pick_driver(driver).loc[gp.laps['LapNumber'] == int(lap)]
+        session = fastf1.get_session(int(year), int(rnd), session_name)
+        session.load()
 
-        if lap_data.empty:
-            return jsonify({"error": "Volta não encontrada"}), 404
+        # Filtrar a volta do piloto
+        laps = session.laps.pick_driver(driver)
+        lap = laps[laps["LapNumber"] == int(lap_number)]
 
-        tel = lap_data.iloc[0].get_car_data().add_distance()
+        if lap.empty:
+            return jsonify({"error": "Volta não encontrada para este piloto"}), 404
+
+        lap_obj = lap.iloc[0]
+        car_data = lap_obj.get_car_data()
+
+        print("DEBUG: Canais disponíveis no car_data:", car_data.columns.tolist())
+
+        if car_data.empty or "Speed" not in car_data or "Time" not in car_data:
+            return (
+                jsonify(
+                    {
+                        "error": "Telemetria incompleta. Verifica se a volta escolhida é válida e contém dados de velocidade/tempo."
+                    }
+                ),
+                500,
+            )
+
+        car_data = car_data.add_distance()
         telemetry = {
-            "Time": tel["Time"].dt.total_seconds().tolist(),
-            "Speed": tel["Speed"].tolist(),
-            "Throttle": tel["Throttle"].tolist(),
-            "Brake": tel["Brake"].astype(int).tolist(),
-            "RPM": tel["RPM"].tolist(),
-            "Gear": tel["nGear"].tolist(),
-            "DRS": tel["DRS"].fillna(0).astype(int).tolist()
+            "Distance": car_data["Distance"].tolist(),
+            "Time": car_data["Time"].dt.total_seconds().tolist(),
+            "Speed": car_data["Speed"].tolist(),
+            "Throttle": car_data["Throttle"].tolist() if "Throttle" in car_data else [],
+            "Brake": (
+                car_data["Brake"].astype(int).tolist() if "Brake" in car_data else []
+            ),
+            "RPM": car_data["RPM"].tolist() if "RPM" in car_data else [],
+            "Gear": car_data["nGear"].tolist() if "nGear" in car_data else [],
+            "DRS": (
+                car_data["DRS"].fillna(0).astype(int).tolist()
+                if "DRS" in car_data
+                else []
+            ),
         }
 
         return jsonify(telemetry)
+
     except Exception as e:
+        print("Erro ao obter telemetria:", e)
         return jsonify({"error": str(e)}), 500
 
 
-''' ROUTES NOT IN USE '''
+@app.route("/api/gcs/generate_trackmap")
+def generate_trackmap():
+    year = int(request.args.get("year"))
+    rnd = int(request.args.get("round"))
+    sess = request.args.get("session")
+    driver = request.args.get("driver")
+    lap = int(request.args.get("lap"))
 
-''' route not in use '''
+    print(
+        f"DEBUG :: Gerando mapa para {year}, round {rnd}, sessão {sess}, piloto {driver}, volta {lap}"
+    )
+
+    try:
+        session = get_session(year, rnd, sess)
+        session.load()
+        lap_data = session.laps.pick_driver(driver).loc[
+            session.laps.pick_driver(driver).LapNumber == lap
+        ]
+
+        if lap_data.empty:
+            print("DEBUG :: Volta não encontrada.")
+            return jsonify({"error": "Volta não encontrada para este piloto."}), 400
+
+        lap_tel = lap_data.iloc[0].get_telemetry()
+        print("DEBUG :: Colunas disponíveis na telemetria:", lap_tel.columns.tolist())
+
+        if any(col not in lap_tel.columns for col in ["X", "Y", "Throttle", "Brake"]):
+            print("DEBUG :: Faltam colunas X/Y/Throttle/Brake")
+            return (
+                jsonify(
+                    {"error": "Dados de telemetria insuficientes (X/Y/Throttle/Brake)."}
+                ),
+                400,
+            )
+
+        colors = []
+        for _, row in lap_tel.iterrows():
+            if row["Brake"] == 1:
+                colors.append("red")
+            elif row["Throttle"] > 0.7:
+                colors.append("green")
+            else:
+                colors.append("gray")
+
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scattergl(
+                x=lap_tel["X"],
+                y=lap_tel["Y"],
+                mode="markers",
+                marker=dict(color=colors, size=5),
+                showlegend=False,
+            )
+        )
+        fig.update_layout(
+            title="Mapa de pista - Aceleração e Travagem",
+            xaxis_title="X",
+            yaxis_title="Y",
+            template="plotly_dark",
+            margin=dict(l=0, r=0, t=30, b=0),
+        )
+
+        # Caminhos
+        gcs_path = f"{year}/{rnd}/{sess}/telemetry/maps/{driver}_lap_{lap}.html"
+        local_dir = "/tmp"
+        os.makedirs(local_dir, exist_ok=True)
+        local_path = os.path.join(local_dir, f"{driver}_lap_{lap}.html")
+
+        # Salvar localmente
+        fig.write_html(local_path)
+
+        # Upload
+        gcs.upload_file(bucketName, local_path, gcs_path)
+
+        print("DEBUG :: Upload concluído:", gcs_path)
+        return jsonify({"status": "success", "object": gcs_path})
+
+    except Exception as e:
+        print("DEBUG :: Exception:", str(e))
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/gcs/lap_consistency")
+def lap_consistency():
+    year = request.args.get("year")
+    rnd = request.args.get("round")
+    session = request.args.get("session")
+    driver = request.args.get("driver")
+
+    try:
+        print(f"[DEBUG] Lap Consistency: year={year}, round={rnd}, session={session}, driver={driver}")
+
+        # Mapear nomes de sessões
+        session_name_mapping = {
+            "FP1": "Practice 1",
+            "FP2": "Practice 2",
+            "FP3": "Practice 3",
+            "Q": "Qualifying",
+            "SQ": "Sprint Qualifying",
+            "SPR": "Sprint",
+            "R": "Race"
+        }
+
+        # Buscar meetings e filtrar testes
+        meeting_url = f"https://api.openf1.org/v1/meetings?year={year}"
+        meetings = requests.get(meeting_url).json()
+        meetings_validos = [m for m in meetings if not m["meeting_name"].lower().startswith("pre-season")]
+        meetings_sorted = sorted(meetings_validos, key=lambda m: m["date_start"])
+        print(f"[DEBUG] Total de meetings válidos (excluindo testes) para {year}: {len(meetings_sorted)}")
+        for i, m in enumerate(meetings_sorted):
+            print(f"[DEBUG] Round {i+1}: {m['meeting_name']} ({m['meeting_key']})")
+
+        # Obter o meeting correto
+        if int(rnd) > len(meetings_sorted):
+            print("[DEBUG] Número de round inválido para meetings disponíveis.")
+            return jsonify([])
+
+        meeting = meetings_sorted[int(rnd) - 1]
+        print(f"[DEBUG] Mapeado round {rnd} → meeting_key={meeting['meeting_key']}")
+
+        # Buscar sessão
+        session_mapped = session_name_mapping.get(session.upper(), session)
+        session_url = f"https://api.openf1.org/v1/sessions?meeting_key={meeting['meeting_key']}&session_name={session_mapped}"
+        sessions = requests.get(session_url).json()
+        if not sessions:
+            print("[DEBUG] Nenhuma sessão encontrada.")
+            return jsonify([])
+
+        session_key = sessions[0]["session_key"]
+
+        # Buscar laps
+        laps_url = f"https://api.openf1.org/v1/laps?session_key={session_key}&driver_number={driver}"
+        laps_data = requests.get(laps_url).json()
+
+        consistency_data = []
+        for lap in laps_data:
+            if lap.get("lap_duration"):
+                consistency_data.append({
+                    "lap": lap["lap_number"],
+                    "lap_time": round(float(lap["lap_duration"]), 3)
+                })
+
+        return jsonify(consistency_data)
+    except Exception as e:
+        print(f"[ERROR] Lap Consistency: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/gcs/tyre_stints")
+def tyre_stints():
+    year = request.args.get("year")
+    rnd = request.args.get("round")
+    session = request.args.get("session")
+    driver = request.args.get("driver")
+
+    try:
+        print(f"[DEBUG] Tyre Stints: year={year}, round={rnd}, session={session}, driver={driver}")
+
+        # Mapear nomes de sessões
+        session_name_mapping = {
+            "FP1": "Practice 1",
+            "FP2": "Practice 2",
+            "FP3": "Practice 3",
+            "Q": "Qualifying",
+            "SQ": "Sprint Qualifying",
+            "SPR": "Sprint",
+            "R": "Race"
+        }
+
+        # Buscar meetings e filtrar testes
+        meeting_url = f"https://api.openf1.org/v1/meetings?year={year}"
+        meetings = requests.get(meeting_url).json()
+        meetings_validos = [m for m in meetings if not m["meeting_name"].lower().startswith("pre-season")]
+        meetings_sorted = sorted(meetings_validos, key=lambda m: m["date_start"])
+        print(f"[DEBUG] Total de meetings válidos (excluindo testes) para {year}: {len(meetings_sorted)}")
+        for i, m in enumerate(meetings_sorted):
+            print(f"[DEBUG] Round {i+1}: {m['meeting_name']} ({m['meeting_key']})")
+
+        if int(rnd) > len(meetings_sorted):
+            print("[DEBUG] Número de round inválido para meetings disponíveis.")
+            return jsonify({"stints": []})
+
+        meeting = meetings_sorted[int(rnd) - 1]
+        print(f"[DEBUG] Mapeado round {rnd} → meeting_key={meeting['meeting_key']}")
+
+        # Buscar sessão
+        session_mapped = session_name_mapping.get(session.upper(), session)
+        session_url = f"https://api.openf1.org/v1/sessions?meeting_key={meeting['meeting_key']}&session_name={session_mapped}"
+        sessions = requests.get(session_url).json()
+        if not sessions:
+            print("[DEBUG] Nenhuma sessão encontrada.")
+            return jsonify({"stints": []})
+
+        session_key = sessions[0]["session_key"]
+
+        # Buscar stints
+        stints_url = f"https://api.openf1.org/v1/stints?session_key={session_key}&driver_number={driver}"
+        stints_data = requests.get(stints_url).json()
+
+        formatted = []
+        for s in stints_data:
+            formatted.append({
+                "compound": s.get("compound", "UNKNOWN"),
+                "startLap": s.get("lap_start"),
+                "endLap": s.get("lap_end"),
+                "tyreLife": s.get("tyre_age_at_start", 0)
+            })
+
+        return jsonify({"stints": formatted})
+    except Exception as e:
+        print(f"[ERROR] Tyre Stints: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+""" ROUTES NOT IN USE """
+
+""" route not in use """
+
+
 @app.route("/api/live_positions")
 def live_positions():
     import numpy as np
@@ -603,7 +962,9 @@ def live_positions():
         schedule = fastf1.get_event_schedule(now.year, include_testing=False)
 
         # Obter última sessão válida
-        schedule = schedule.dropna(subset=[f"Session{i}DateUtc" for i in range(1, 6)], how='all')
+        schedule = schedule.dropna(
+            subset=[f"Session{i}DateUtc" for i in range(1, 6)], how="all"
+        )
         past_sessions = []
         for i in range(1, 6):
             date_col = f"Session{i}DateUtc"
@@ -651,7 +1012,9 @@ def live_positions():
         return jsonify([])
 
 
-''' route not in use '''
+""" route not in use """
+
+
 @app.route("/api/replay_telemetry")
 def replay_telemetry():
     session_key = request.args.get("session_key")
@@ -675,7 +1038,9 @@ def replay_telemetry():
         return jsonify({"error": str(e)}), 500
 
 
-''' route not in use '''
+""" route not in use """
+
+
 @app.route("/api/compare")
 def api_compare():
     driver1 = request.args.get("driver1")
@@ -705,7 +1070,9 @@ def api_compare():
         return jsonify({"error": str(e)}), 500
 
 
-''' route not in use '''
+""" route not in use """
+
+
 @app.route("/api/drivers")
 def drivers():
     year = int(request.args.get("year", 2024))
@@ -743,7 +1110,9 @@ def drivers():
         return jsonify({"error": f"Erro ao buscar dados: {str(e)}"}), 500
 
 
-''' route not in use '''
+""" route not in use """
+
+
 @app.route("/api/telemetry")
 def telemetry():
     year = int(request.args.get("year"))
@@ -805,7 +1174,9 @@ def telemetry():
         return jsonify({"error": "Erro ao buscar telemetria: " + str(e)})
 
 
-''' route not in use '''
+""" route not in use """
+
+
 @app.route("/api/track")
 def track():
     year = int(request.args.get("year", 2024))
@@ -830,7 +1201,9 @@ def track():
         return jsonify({"error": f"Erro ao buscar circuito: {str(e)}"}), 500
 
 
-''' route not in use '''
+""" route not in use """
+
+
 @app.route("/api/live_dashboard")
 def live_dashboard():
     session_key = request.args.get("session_key", "latest")
@@ -936,7 +1309,9 @@ def live_dashboard():
         return jsonify({"error": str(e)}), 500
 
 
-''' route not in use '''
+""" route not in use """
+
+
 @app.route("/api/current_session")
 def current_session():
     try:

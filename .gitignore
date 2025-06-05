@@ -7,4 +7,4 @@ firebase.js
 firebase.json
 firestore.rules
 firebase.indexes.json
-
+tmp/

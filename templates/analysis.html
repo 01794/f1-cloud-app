@@ -7,7 +7,7 @@
   <title>F1 LVTL</title>
   <link rel="stylesheet" href="/static/css/telemetry.css" />
   <!-- Plotly -->
-  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="/static/js/analysis.js" defer></script>
 </head>
@@ -16,14 +16,13 @@
   <div class="container">
     <div class="sidebar">
       <h2>F1 LVTL</h2>
-      <a href="/index">🏁 Index</a>
-      <a href="/analysis">📊 Analysis</a>
+      <a href="/">🏁 Index</a>
+      <a href="/live_telemetry">🏎 Live Telemetry</a>
       <a href="/replay">⏪ Replay</a>
     </div>
 
     <div class="header">
       <div id="sessionInfo">Seleciona um GP para iniciar análise...</div>
-      <div id="session-details" style="text-align: right;">Detalhes do GP aparecerão aqui.</div>
     </div>
 
     <main style="padding: 20px;">
@@ -35,6 +34,15 @@
           <option>2024</option>
           <option>2023</option>
           <option>2022</option>
+          <option>2021</option>
+          <option>2020</option>
+          <option>2019</option>
+          <option>2018</option>
+          <option>2017</option>
+          <option>2016</option>
+          <option>2015</option>
+          <option>2014</option>
+          <option>2013</option>
         </select>
 
         <label for="roundSelect">Round:</label>
@@ -50,11 +58,6 @@
         </select>
 
         <button id="loadSessionBtn">Carregar Info Sessão</button>
-      </div>
-
-      <div class="info">
-        <div><strong>Informações da Pista:</strong> <span id="trackDetails">Nenhuma pista carregada.</span></div>
-        <div><strong>Informações da Sessão:</strong> <span id="sessionDetails">Nenhuma sessão carregada.</span></div>
       </div>
 
       <div class="drivers-section">
@@ -92,10 +95,23 @@
 
       <div style="margin-top: 40px;">
         <h3>Gráficos de Telemetria</h3>
-        <div id="speedChart"></div>
-        <div id="throttleBrakeChart"></div>
-        <div id="rpmGearChart"></div>
-        <div id="drsChart"></div>
+        <div style="display: flex; gap: 20px; justify-content: center;">
+          <div id="speedChart" style="width: 50%; height: 400px;"></div>
+
+          <div id="rpmGearChart" style="width: 50%; height: 400px;"></div>
+          <div id="drsChart" style="width: 50%; height: 400px;"></div>
+
+          <div id="speedHistogram" style="width: 50%; height: 400px;"></div>
+        </div>
+        <div style="display: flex; gap: 20px; justify-content: center;">
+          <div id="throttleBrakeChart" style="width: 50%; height: 400px;"></div>
+          <div id="trackMapChart" style="width: 50%; height: 400px;"></div>
+        </div>
+        <h3 style="padding-top: 40px;">Race Specific Telemetry</h3>
+        <div style="display: flex; gap: 20px; justify-content: center;">
+          <div id="lapConsistencyChart" style="width: 50%; height: 400px;"></div>
+          <div id="tyreStintsChart" style="width: 50%; height: 400px;"></div>
+        </div>
       </div>
 
       <div id="dashboard" style="margin-top: 20px;">
@@ -103,12 +119,6 @@
         <p id="lapSummary">Nenhuma volta selecionada.</p>
       </div>
 
-      <div id="playbackControls" style="margin-top: 20px;">
-        <h3>Playback da Volta</h3>
-        <button id="playBtn">▶️ Play</button>
-        <button id="pauseBtn" disabled>⏸ Pause</button>
-        <input type="range" id="playbackProgress" min="0" max="100" value="0" />
-      </div>
     </main>
   </div>
 </body>

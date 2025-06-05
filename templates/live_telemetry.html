@@ -52,7 +52,8 @@
       </div>
       <div class="map">
         <h3>Mapa do Circuito</h3>
-        <canvas id="track-canvas" width="4000" height="4000" style="width: 100%; height: 400px; background-color: #111;"></canvas>
+        <canvas id="track-canvas" width="2000" height="2000"
+          style="width: 100%; height: 400px; background-color: #111;"></canvas>
       </div>
     </div>
 
@@ -72,6 +73,16 @@
         <h2>Penalidades</h2>
         <ul id="penalty-list"></ul>
       </div>
+      <script>
+        window.addEventListener("load", () => {
+          fetch("/enter_live");
+        });
+
+        window.addEventListener("beforeunload", () => {
+          navigator.sendBeacon("/exit_live");
+        });
+      </script>
+
 
     </div>
   </div>
