@@ -3,67 +3,78 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Replay de Sessão</title>
-  <style>
-    body { background-color: #111; color: white; font-family: sans-serif; margin: 0; padding: 0; }
-    .container { display: flex; }
-    .sidebar { width: 200px; background-color: #222; padding: 20px; }
-    .sidebar a { display: block; margin: 10px 0; color: white; text-decoration: none; }
-    .header, .controls { padding: 20px; background-color: #333; }
-    .controls { display: flex; align-items: center; gap: 10px; }
-    #progress-bar { flex: 1; }
-    .main { flex: 1; }
-    .map-table-container { display: flex; gap: 20px; padding: 20px; align-items: flex-start; }
-    #replay-map { width: 100%; height: 500px; background-color: #111; overflow: hidden; }
-    #driver-table { width: 100%; color: white; border-collapse: collapse; }
-    #driver-table th, #driver-table td { border-bottom: 1px solid #555; padding: 5px; text-align: left; }
-    #driver-table tr.leader { font-weight: bold; color: #ffcc00; }
-    #tooltip { position: absolute; background: #222; color: #fff; padding: 5px 10px; border-radius: 5px;
-               font-size: 14px; display: none; pointer-events: none; z-index: 10; }
-  </style>
+  <title>F1 Replay</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/telemetry.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/replay.css') }}">
 </head>
 <body>
-<div class="container">
-  <div class="sidebar">
-    <h2>F1 REPLAY</h2>
-    <a href="/">🏁 Live</a>
-    <a href="/analysis">📊 Analysis</a>
+<div class="container replay-container">
+  <div class="sidebar replay-sidebar">
+    <div class="sidebar-header">
+      <h2>F1<span>REPLAY</span></h2>
+    </div>
+    <a href="/" class="active"><i class="fas fa-flag-checkered"></i> Live</a>
+    <a href="/analysis"><i class="fas fa-chart-line"></i> Analysis</a>
+    <a href="/replay"><i class="fas fa-history"></i> Replay</a>
   </div>
-  <div class="main">
-    <div class="header">
-      <label for="year">Ano:</label>
+  
+  <div class="main replay-main">
+    <div class="header replay-header">
+      <label for="year"><i class="fas fa-calendar"></i> Ano:</label>
       <input type="number" id="year" value="2024" min="2021" max="2025" />
-      <label for="round">Ronda:</label>
+      
+      <label for="round"><i class="fas fa-flag"></i> Ronda:</label>
       <input type="number" id="round" value="1" min="1" max="25" />
-      <label for="session">Sessão:</label>
-      <input type="text" id="session" value="R" />
-      <button onclick="startReplay()">Visualizar Sessão</button>
+      
+      <label for="session"><i class="fas fa-play-circle"></i> Sessão:</label>
+      <select id="session">
+        <option value="R">Corrida</option>
+        <option value="Q">Qualificação</option>
+        <option value="FP1">Treino 1</option>
+        <option value="FP2">Treino 2</option>
+        <option value="FP3">Treino 3</option>
+      </select>
+      
+      <button onclick="startReplay()"><i class="fas fa-play"></i> Visualizar Sessão</button>
     </div>
 
-    <div class="controls">
-      <button onclick="togglePlayPause()">⏯️</button>
-      <label for="speed-select">Velocidade:</label>
-      <select id="speed-select" onchange="updateSpeed()">
-        <option value="1000">1x</option>
-        <option value="500">2x</option>
-        <option value="250">4x</option>
-        <option value="100">10x</option>
-      </select>
+    <div class="controls replay-controls">
+      <button id="play-pause-btn" title="Play/Pause">
+        <i class="fas fa-play"></i>
+      </button>
+      
+      <div class="speed-control">
+        <i class="fas fa-tachometer-alt"></i>
+        <label for="speed-select">Velocidade:</label>
+        <select id="speed-select" onchange="updateSpeed()">
+          <option value="1000">1x</option>
+          <option value="500">2x</option>
+          <option value="250">4x</option>
+          <option value="100">10x</option>
+        </select>
+      </div>
+      
       <input type="range" id="progress-bar" min="0" value="0" step="1" oninput="seekFrame(this.value)" />
       <span id="time-label">0:00 / 0:00</span>
-      <label for="lap-select" style="margin-left: 20px;">Ir para volta:</label>
-      <select id="lap-select" onchange="jumpToLap()" style="width: 100px;">
-        <option value="">--</option>
-      </select>
+      
+      <div class="lap-control">
+        <i class="fas fa-flag"></i>
+        <label for="lap-select">Ir para volta:</label>
+        <select id="lap-select" onchange="jumpToLap()">
+          <option value="">--</option>
+        </select>
+      </div>
     </div>
 
-    <div class="map-table-container">
-      <div style="flex: 2;">
-        <h3>Replay do Mapa</h3>
+    <div class="map-table-container replay-map-table-container">
+      <div class="map-container">
+        <h3><i class="fas fa-map-marked-alt"></i> Replay do Mapa</h3>
         <svg id="replay-map" viewBox="0 0 4000 4000" preserveAspectRatio="xMidYMid meet"></svg>
       </div>
-      <div style="flex: 1;">
-        <h3>Classificação Atual</h3>
+      
+      <div class="table-container">
+        <h3><i class="fas fa-trophy"></i> Classificação Atual</h3>
         <table id="driver-table">
           <thead>
             <tr>
@@ -81,238 +92,6 @@
 
 <div id="tooltip"></div>
 
-<script>
-let frames = [];
-let currentFrame = 0;
-let replayInterval;
-let pathCoords = [];
-let isPlaying = false;
-let playbackSpeed = 1000;
-let lapTimes = {};
-let lapIndexMap = {};
-
-
-function startReplay() {
-  clearInterval(replayInterval);
-  currentFrame = 0;
-  isPlaying = false;
-
-  const svg = document.getElementById('replay-map');
-  svg.innerHTML = '';
-
-  const year = document.getElementById('year').value;
-  const round = document.getElementById('round').value;
-  const session = document.getElementById('session').value;
-
-  fetch(`/api/track_layout?year=${year}&round=${round}&session=${session}`)
-    .then(res => res.json())
-    .then(layout => {
-      if (!Array.isArray(layout) || layout.length === 0) throw new Error("Traçado inválido");
-      pathCoords = layout;
-      const path = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-      path.setAttribute("points", layout.map(p => `${p.x},${p.y}`).join(" "));
-      path.setAttribute("fill", "none");
-      path.setAttribute("stroke", "#555");
-      path.setAttribute("stroke-width", "5");
-      svg.appendChild(path);
-      return Promise.all([
-        fetch(`/api/replay_data?year=${year}&round=${round}&session=${session}`).then(r => r.json()),
-        fetch(`/api/lap_times?year=${year}&round=${round}&session=${session}`).then(r => r.json())
-      ]);
-    })
-    .then(([replayData, lapData]) => {
-      frames = replayData.frames;
-      lapIndexMap = replayData.lap_index_map || {};
-      
-      // Preencher seletor de voltas
-      const lapSelect = document.getElementById("lap-select");
-      lapSelect.innerHTML = "<option value=''>--</option>";
-      
-      // Ordenar voltas numericamente
-      const sortedLaps = Object.keys(lapIndexMap)
-        .map(Number)
-        .sort((a, b) => a - b);
-      
-      sortedLaps.forEach(lapNumber => {
-          const option = document.createElement("option");
-          option.value = lapNumber;
-          option.textContent = `Volta ${lapNumber}`;
-          lapSelect.appendChild(option);
-      });
-
-      // Atualizar a viewBox inicial
-      updateViewBox();
-      // Renderizar o primeiro frame
-      renderNextFrame();
-      updateProgressUI();
-    })
-    .catch(err => {
-      console.error("Erro ao carregar dados:", err);
-      alert("Erro ao carregar dados da sessão.");
-    });
-}
-
-function togglePlayPause() {
-  isPlaying = !isPlaying;
-  if (isPlaying) replayInterval = setInterval(playNext, playbackSpeed);
-  else clearInterval(replayInterval);
-}
-
-function playNext() {
-  if (currentFrame >= frames.length) {
-    clearInterval(replayInterval);
-    isPlaying = false;
-    return;
-  }
-  renderNextFrame();
-  updateViewBox(); // Atualizar a viewBox para o frame atual
-  currentFrame++;
-  updateProgressUI();
-}
-
-function seekFrame(value) {
-  currentFrame = parseInt(value);
-  renderNextFrame();
-  updateViewBox(); // Atualizar a viewBox para o frame atual
-  updateProgressUI();
-}
-
-function updateSpeed() {
-  playbackSpeed = parseInt(document.getElementById("speed-select").value);
-  if (isPlaying) {
-    clearInterval(replayInterval);
-    replayInterval = setInterval(playNext, playbackSpeed);
-  }
-}
-
-function updateProgressUI() {
-  const bar = document.getElementById("progress-bar");
-  const label = document.getElementById("time-label");
-  
-  if (frames.length > 0) {
-    bar.max = frames.length - 1;
-    bar.value = currentFrame;
-    
-    // Formatar tempo em minutos:segundos
-    const currentSeconds = frames[currentFrame]?.time_sec || 0;
-    const totalSeconds = frames[frames.length - 1]?.time_sec || 0;
-    
-    const formatTime = (seconds) => {
-      const mins = Math.floor(seconds / 60);
-      const secs = Math.floor(seconds % 60);
-      return `${mins}:${String(secs).padStart(2, '0')}`;
-    };
-
-    label.textContent = `${formatTime(currentSeconds)} / ${formatTime(totalSeconds)}`;
-  } else {
-    label.textContent = "0:00 / 0:00";
-  }
-}
-
-function updateViewBox() {
-  const svg = document.getElementById('replay-map');
-  const allPoints = [...pathCoords];
-  
-  // Adicionar posições dos carros do frame atual
-  if (frames.length > 0 && frames[currentFrame]?.positions) {
-    frames[currentFrame].positions.forEach(car => {
-      allPoints.push({x: car.x, y: car.y});
-    });
-  }
-  
-  // Calcular os limites
-  const minX = Math.min(...allPoints.map(p => p.x));
-  const maxX = Math.max(...allPoints.map(p => p.x));
-  const minY = Math.min(...allPoints.map(p => p.y));
-  const maxY = Math.max(...allPoints.map(p => p.y));
-  
-  // Calcular dimensões
-  const width = maxX - minX;
-  const height = maxY - minY;
-  
-  // Adicionar margem (10% da maior dimensão)
-  const margin = Math.max(width, height) * 0.1;
-  
-  // Aplicar viewBox
-  svg.setAttribute("viewBox", 
-    `${minX - margin} ${minY - margin} ${width + 2 * margin} ${height + 2 * margin}`);
-}
-
-function jumpToLap() {
-  const lapNumber = document.getElementById("lap-select").value;
-  if (lapNumber && lapIndexMap[lapNumber] !== undefined) {
-    currentFrame = lapIndexMap[lapNumber];
-    
-    // Forçar renderização imediata
-    renderNextFrame();
-    updateViewBox(); // Atualizar a viewBox para o frame atual
-    updateProgressUI();
-    
-    // Atualizar a barra de progresso
-    document.getElementById("progress-bar").value = currentFrame;
-    
-    // Se estava reproduzindo, continuar de onde parou
-    if (isPlaying) {
-      clearInterval(replayInterval);
-      replayInterval = setInterval(playNext, playbackSpeed);
-    }
-  }
-}
-
-function renderNextFrame() {
-  const svg = document.getElementById('replay-map');
-  const tooltip = document.getElementById('tooltip');
-  // Remove todos os elementos, exceto a pista (o primeiro filho)
-  while (svg.children.length > 1) {
-    svg.removeChild(svg.lastChild);
-  }
-
-  const positions = frames[currentFrame]?.positions || [];
-  positions.sort((a, b) => a.position - b.position);
-
-  const tableBody = document.querySelector("#driver-table tbody");
-  tableBody.innerHTML = "";
-
-  positions.forEach(car => {
-    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    circle.setAttribute("cx", car.x);
-    circle.setAttribute("cy", car.y);
-    circle.setAttribute("r", 90);
-    circle.setAttribute("fill", "blue");
-    circle.setAttribute("stroke", "#fff");
-
-    const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-    label.setAttribute("x", car.x);
-    label.setAttribute("y", car.y - 40);
-    label.setAttribute("fill", "#fff");
-    label.setAttribute("font-size", "22");
-    label.setAttribute("text-anchor", "middle");
-    label.textContent = car.driver_number;
-    svg.appendChild(circle);
-    svg.appendChild(label);
-
-    const row = document.createElement("tr");
-    row.innerHTML = `
-      <td>${car.position}º</td>
-      <td>${car.driver_number}</td>
-      <td>${car.driver_name}</td>`;
-    
-    // Destacar líder
-    if (car.position === 1) {
-      row.classList.add("leader");
-    }
-    tableBody.appendChild(row);
-
-    circle.addEventListener('mousemove', e => {
-      tooltip.style.left = `${e.pageX + 10}px`;
-      tooltip.style.top = `${e.pageY + 10}px`;
-      tooltip.textContent = `${car.position}º - ${car.driver_name || 'Desconhecido'}`;
-      tooltip.style.display = 'block';
-    });
-
-    circle.addEventListener('mouseout', () => tooltip.style.display = 'none');
-  });
-}
-</script>
+<script src="{{ url_for('static', filename='js/replay.js') }}"></script>
 </body>
 </html>
