@@ -203,17 +203,7 @@ function jumpToLap() {
   }
 }
 
-function syncContainersHeight() {
-    const table = document.querySelector('#driver-table tbody');
-    const mapContainer = document.querySelector('.map-container');
-    
-    if (table && mapContainer) {
-      const tableHeight = table.clientHeight;
-      mapContainer.style.height = `${tableHeight + 40}px`; // +40px para cabeçalho
-    }
-  }
 
-  
 // Renderizar frame atual
 function renderNextFrame() {
   const svg = document.getElementById('replay-map');
@@ -321,7 +311,6 @@ function renderNextFrame() {
   
   // Salvar posições para próximo frame
   lastDriverPositions = {...currentDriverPositions};
-  syncContainersHeight(); 
 }
 
 // Inicialização quando a página carrega
@@ -332,5 +321,4 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Event listener para o botão "Visualizar Sessão"
     document.querySelector('.replay-header button').addEventListener('click', startReplay);
-    
   });

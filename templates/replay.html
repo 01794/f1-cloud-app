@@ -6,27 +6,26 @@
   <title>F1 Replay</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/telemetry.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/replay.css') }}">
+
 </head>
 <body>
-<div class="container replay-container">
-  <div class="sidebar replay-sidebar">
-    <div class="sidebar-header">
-      <h2>F1<span>REPLAY</span></h2>
-    </div>
-    <a href="/" class="active"><i class="fas fa-flag-checkered"></i> Live</a>
-    <a href="/analysis"><i class="fas fa-chart-line"></i> Analysis</a>
-    <a href="/replay"><i class="fas fa-history"></i> Replay</a>
+<div class="container">
+  <div class="sidebar">
+    <h2>F1 LVTL</h2>
+    <a href="/index">🏁 Index</a>
+    <a href="/analysis">📊 Analysis</a>
+    <a href="/replay">⏪ Replay</a>
   </div>
   
+
   <div class="main replay-main">
     <div class="header replay-header">
       <label for="year"><i class="fas fa-calendar"></i> Ano:</label>
       <input type="number" id="year" value="2024" min="2021" max="2025" />
-      
+
       <label for="round"><i class="fas fa-flag"></i> Ronda:</label>
       <input type="number" id="round" value="1" min="1" max="25" />
-      
+
       <label for="session"><i class="fas fa-play-circle"></i> Sessão:</label>
       <select id="session">
         <option value="R">Corrida</option>
@@ -35,7 +34,7 @@
         <option value="FP2">Treino 2</option>
         <option value="FP3">Treino 3</option>
       </select>
-      
+
       <button onclick="startReplay()"><i class="fas fa-play"></i> Visualizar Sessão</button>
     </div>
 
@@ -43,7 +42,7 @@
       <button id="play-pause-btn" title="Play/Pause">
         <i class="fas fa-play"></i>
       </button>
-      
+
       <div class="speed-control">
         <i class="fas fa-tachometer-alt"></i>
         <label for="speed-select">Velocidade:</label>
@@ -54,10 +53,10 @@
           <option value="100">10x</option>
         </select>
       </div>
-      
+
       <input type="range" id="progress-bar" min="0" value="0" step="1" oninput="seekFrame(this.value)" />
       <span id="time-label">0:00 / 0:00</span>
-      
+
       <div class="lap-control">
         <i class="fas fa-flag"></i>
         <label for="lap-select">Ir para volta:</label>
@@ -72,7 +71,7 @@
         <h3><i class="fas fa-map-marked-alt"></i> Replay do Mapa</h3>
         <svg id="replay-map" viewBox="0 0 4000 4000" preserveAspectRatio="xMidYMid meet"></svg>
       </div>
-      
+
       <div class="table-container">
         <h3><i class="fas fa-trophy"></i> Classificação Atual</h3>
         <table id="driver-table">
