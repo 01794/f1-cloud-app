@@ -471,3 +471,63 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 });
+
+document.getElementById("exportChartsBtn").addEventListener("click", async () => {
+  const chartIds = [
+    "speedChart",
+    "throttleBrakeChart",
+    "rpmGearChart",
+    "drsChart",
+    "speedHistogram",
+    "trackMapChart",
+    "lapConsistencyChart",
+    "tyreStintsChart"
+  ];
+
+  const year = document.getElementById("yearSelect").value;
+  const round = document.getElementById("roundSelect").value;
+  const session = document.getElementById("sessionSelect").value;
+  const driver = document.getElementById("driverSelect").value;
+
+  if (!driver) return alert("Seleciona um piloto antes de exportar.");
+
+  for (const id of chartIds) {
+    const chartDiv = document.getElementById(id);
+    if (chartDiv && chartDiv.data) {
+      try {
+        const pngData = await Plotly.toImage(chartDiv, {
+          format: 'png', height: 600, width: 800, scale: 2
+        });
+
+        const blob = await (await fetch(pngData)).blob();
+        const formData = new FormData();
+        formData.append("file", blob, `${id}.png`);
+
+        const res = await fetch(`/api/gcs/upload_chart?year=${year}&round=${round}&session=${session}&driver=${driver}&chart=${id}`, {
+          method: "POST",
+          body: formData
+        });
+
+        const result = await res.json();
+        console.log(`Upload de ${id}:`, result);
+      } catch (err) {
+        console.error(`Erro ao exportar gráfico ${id}:`, err);
+      }
+    }
+  }
+
+  chartIds.forEach((id) => {
+    const chartDiv = document.getElementById(id);
+    if (chartDiv && chartDiv.data && chartDiv.data.length > 0) {
+      Plotly.downloadImage(chartDiv, {
+        format: 'png',
+        filename: id,
+        width: 1200,
+        height: 600,
+      });
+    }
+  });
+
+  alert("Gráficos exportados com sucesso para o Google Cloud Storage!");
+});
+

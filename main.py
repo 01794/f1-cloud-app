@@ -351,7 +351,7 @@ def exit_live():
     return jsonify({"status": "exited"})
 
 # ------------------------------
-# --- Routes funcionais ---
+# --- Routes funcionais --------
 
 @app.route("/")
 def index():
@@ -1040,6 +1040,22 @@ def tyre_stints():
         print(f"[ERROR] Tyre Stints: {e}")
         return jsonify({"error": str(e)}), 500
 
+
+@app.route("/api/gcs/upload_chart", methods=["POST"])
+def upload_chart():
+    file = request.files.get("file")
+    year = request.args.get("year")
+    round_ = request.args.get("round")
+    session = request.args.get("session")
+    driver = request.args.get("driver")
+    chart = request.args.get("chart")
+
+    if not all([file, year, round_, session, driver, chart]):
+        return {"error": "Missing parameters"}, 400
+
+    filename = f"{year}/{round_}/{session}/{driver}/{chart}.png"
+    upload_blob("f1-cloud-lvtl-cache", file, filename)
+    return {"message": f"Uploaded {filename} to GCS"}, 200
 
 """ ROUTES NOT IN USE """
 

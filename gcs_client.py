@@ -37,3 +37,12 @@ class GCSClient:
             version="v4", expiration=3600 * 24 * 365 * 100, method="GET"
         )
         return {"url": url, "fileName": filename}
+    
+    def upload_blob(self, source_file_name, destination_blob_name):
+        """Uploads a file to the bucket."""
+        blob = self.bucket.blob(destination_blob_name)
+        blob.upload_from_filename(source_file_name)
+        print(f"File {source_file_name} uploaded to {destination_blob_name}.")
+
+    
+__all__ = ['GCSClient']
